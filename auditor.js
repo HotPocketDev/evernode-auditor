@@ -1,15 +1,25 @@
 const fs = require('fs');
-const logger = require('./lib/logger');
-const { RippleAPIWarpper, Events } = require('./lib/ripple-handler');
+const { v4: uuidv4 } = require('uuid');
+const { EvernodeClient } = require('evernode-js-client');
 const { SqliteDatabase, DataTypes } = require('./lib/sqlite-handler');
 
-const CONFIG_PATH = 'auditor.cfg';
-const DB_PATH = 'auditor.sqlite';
-const LOG_PATH = 'auditor.log';
+// Environment variables.
+const IS_DEV_MODE = process.env.DEV === "1";
+const RIPPLED_URL = process.env.RIPPLED_URL || "wss://hooks-testnet.xrpl-labs.com";
+const DATA_DIR = process.env.DATA_DIR || ".";
+
+const CONFIG_PATH = DATA_DIR + '/auditor.cfg';
+const DB_PATH = DATA_DIR + '/auditor.sqlite';
 const DB_TABLE_NAME = 'audit_req';
 const MOMENT_BASE_INDEX = 0;
-const LEDGERS_PER_MOMENT = 72;
+const LEDGERS_PER_MOMENT = 5;
 
+const OWNER_PUBKEY = 'ed5cb83404120ac759609819591ef839b7d222c84f1f08b3012f490586159d2b50';
+const INSTANCE_IMAGE = 'hp.latest-ubt.20.04-njs.14';
+
+const Events = {
+    LEDGER: 'ledger'
+}
 
 const AuditStatus = {
     CREATED: 'Created',
@@ -22,23 +32,25 @@ const AuditStatus = {
 }
 
 class Auditor {
-    constructor(configPath, dbPath, rippleServer) {
+    constructor(configPath, dbPath) {
         this.configPath = configPath;
         this.auditTable = DB_TABLE_NAME;
 
         if (!fs.existsSync(this.configPath))
             throw `${this.configPath} does not exist.`;
 
-        this.ripplAPI = new RippleAPIWarpper(rippleServer);
         this.db = new SqliteDatabase(dbPath);
     }
 
-    async init() {
+    async init(rippleServer) {
         this.readConfig();
         if (!this.cfg.xrpl.address || !this.cfg.xrpl.secret || !this.cfg.xrpl.hookAddress)
             throw "Required cfg fields cannot be empty.";
 
-        try { await this.ripplAPI.connect(); }
+        this.evernodeClient = new EvernodeClient(this.cfg.xrpl.address, this.cfg.xrpl.secret, { hookAddress: this.cfg.xrpl.hookAddress, rippledServer: rippleServer });
+        this.rippleAPI = this.evernodeClient.rippleAPI;
+
+        try { await this.evernodeClient.connect(); }
         catch (e) { throw e; }
 
         this.db.open();
@@ -48,15 +60,17 @@ class Auditor {
         this.db.close();
 
         // Keep listening to ripple ledger creations and keep track of moments.
-        this.ripplAPI.events.on(Events.LEDGER, async (e) => {
+        this.rippleAPI.events.on(Events.LEDGER, async (e) => {
             this.lastValidatedLedgerIdx = e.ledgerVersion;
             // If this is the start of a new moment.
             if ((this.lastValidatedLedgerIdx - MOMENT_BASE_INDEX) % LEDGERS_PER_MOMENT === 0) {
                 this.curMomentStartIdx = this.lastValidatedLedgerIdx;
                 // Start the audit cycle for the moment.
-                try { await this.auditCycle(this.curMomentStartIdx); }
+                // Keep constant variable of momentStartIdx since curMomentStartIdx is changing.
+                const momentStartIdx = this.curMomentStartIdx;
+                try { await this.auditCycle(momentStartIdx); }
                 catch (e) {
-                    console.log(`Audit request failed: ${e}`);
+                    this.logMessage(e, momentStartIdx);
                 }
             }
         });
@@ -66,124 +80,128 @@ class Auditor {
         this.db.open();
 
         // Before this moment cycle, we expire the old draft audits.
-        for (const moment of this.draftAudits) {
-            console.log(`Audit for the moment ${moment} has been expired.`)
-            this.expireTheAudit(moment);
-        }
+        this.expireTheDraftAudits();
 
-        console.log(`Requesting for an audit at ${momentStartIdx}`);
+        this.logMessage('Requesting for an audit.', momentStartIdx);
         await this.createAuditRecord(momentStartIdx);
         this.setAsDraft(momentStartIdx);
 
+        try {
+            const hostInfo = await this.sendAuditRequest();
+
+            // Check whether moment is expired after the response.
+            if (!this.checkMomentValidity(momentStartIdx))
+                return;
+
+            await this.updateAuditCashed(momentStartIdx, hostInfo.currency);
+
+            this.logMessage(`Redeeming from the host, token - ${hostInfo.currency}`, momentStartIdx);
+            const instanceInfo = await this.sendRedeemRequest(hostInfo);
+
+            // Check whether moment is expired after the redeem.
+            if (!this.checkMomentValidity(momentStartIdx))
+                return;
+
+            await this.updateAuditStatus(momentStartIdx, AuditStatus.REDEEMED);
+
+            this.logMessage(`Auditing the host, token - ${hostInfo.currency}`, momentStartIdx);
+            const auditRes = await this.auditInstance(instanceInfo);
+
+            // Check whether moment is expired after the audit.
+            if (!this.checkMomentValidity(momentStartIdx))
+                return;
+
+            if (auditRes) {
+                this.logMessage(`Host has passed the audit, token - ${hostInfo.currency}`, momentStartIdx);
+                await this.updateAuditStatus(momentStartIdx, AuditStatus.AUDITSUCCESS);
+                await this.sendAuditSuccess(hostInfo);
+            }
+            else {
+                this.logMessage(`Host has failed the audit, token - ${hostInfo.currency}`, momentStartIdx);
+                await this.updateAuditStatus(momentStartIdx, AuditStatus.AUDITFAILED);
+            }
+        }
+        catch (e) {
+            console.log(`Audit failed ${e}`, momentStartIdx);
+            await this.updateAuditStatus(momentStartIdx, AuditStatus.FAILED);
+        }
+
+        this.removeFromDraft(momentStartIdx);
         this.db.close();
-
-        return new Promise((resolve, reject) => {
-            this.sendAuditRequest().then(async (hostInfo) => {
-                this.db.open();
-
-                // If the moment is expired when the response received, we just expire the audit.
-                if (momentStartIdx < this.curMomentStartIdx) {
-                    this.expireTheAudit(momentStartIdx);
-                    reject(`Audit for the moment ${momentStartIdx} has been expired.`);
-                    return;
-                }
-
-                await this.updateAuditCashed(momentStartIdx, hostInfo.hostingToken);
-
-                console.log(`Auditing the host with token ${hostInfo.hostingToken}`);
-                const success = await this.audit(hostInfo);
-
-                // If the moment is expired when the audit response received, we just expire the audit.
-                if (momentStartIdx < this.curMomentStartIdx) {
-                    this.expireTheAudit(momentStartIdx);
-                    reject(`Audit for the moment ${momentStartIdx} has been expired.`);
-                    return;
-                }
-
-                if (success) {
-                    console.log(`Host with token ${hostInfo.hostingToken} has passed the audit.`);
-                    await this.updateAuditStatus(momentStartIdx, AuditStatus.AUDITSUCCESS);
-                    await this.sendAuditSuccess(hostInfo);
-                }
-                else {
-                    console.log(`Host with token ${hostInfo.hostingToken} has failed the audit.`);
-                    await this.updateAuditStatus(momentStartIdx, AuditStatus.AUDITFAILED);
-                }
-
-                this.db.close();
-                resolve();
-            }).catch(async (e) => {
-                this.db.open();
-                await this.updateAuditStatus(momentStartIdx, AuditStatus.FAILED);
-                this.db.close();
-                reject(e);
-            }).finally(() => {
-                this.removeFromDraft(momentStartIdx);
-            });
-        });
     }
 
-    setAsDraft(momentStartIdx) {
-        this.draftAudits.push(momentStartIdx);
+    setAsDraft(...momentStartIdxes) {
+        this.draftAudits = this.draftAudits.concat(momentStartIdxes);
     }
 
-    removeFromDraft(momentStartIdx) {
-        const i = this.draftAudits.indexOf(momentStartIdx);
-        if (i > -1)
-            this.draftAudits.splice(i, 1);
+    removeFromDraft(...momentStartIdxes) {
+        this.draftAudits = this.draftAudits.filter(m => !momentStartIdxes.includes(m));
     }
 
-    async audit(hostInfo) {
-        const instanceInfo = await this.sendRedeemRequest(hostInfo);
-        this.updateAuditStatus(this.curMomentStartIdx, AuditStatus.REDEEMED);
+    clearDraft() {
+        this.draftAudits = [];
+    }
 
+    checkMomentValidity(momentStartIdx) {
+        return (momentStartIdx == this.curMomentStartIdx);
+    }
+
+    async auditInstance(instanceInfo) {
         return new Promise(resolve => {
             setTimeout(() => {
                 resolve(true);
-            }, 10000);
-        })
+            }, 5000);
+        });
     }
 
     async sendAuditRequest() {
-        return new Promise((resolve) => {
-            setTimeout(() => {
-                resolve({
-                    hostingToken: 'HTK',
-                    issues: '-----------------------'
-                });
-            }, 100);
-        })
+        return (await this.evernodeClient.requestAudit());
     }
 
     async sendAuditSuccess() {
     }
 
     async sendRedeemRequest(hostInfo) {
+        return (await this.evernodeClient.redeem(hostInfo.currency, hostInfo.address, hostInfo.amount, {}));
     }
 
-    async expireTheAudit(momentStartIdx) {
-        await this.updateAuditStatus(momentStartIdx, AuditStatus.EXPIRED);
-        this.removeFromDraft(momentStartIdx);
+    async expireTheDraftAudits() {
+        if (this.draftAudits && this.draftAudits.length) {
+            this.logMessage('Audit has been expired.', ...this.draftAudits);
+            await this.updateAuditStatuses(AuditStatus.EXPIRED, ...this.draftAudits);
+            this.clearDraft();
+        }
     }
 
     async initMomentInfo() {
-        this.lastValidatedLedgerIdx = await this.ripplAPI.getLedgerVersion();
+        this.lastValidatedLedgerIdx = await this.rippleAPI.getLedgerVersion();
         const relativeN = (this.lastValidatedLedgerIdx - MOMENT_BASE_INDEX) / LEDGERS_PER_MOMENT;
         this.curMomentStartIdx = MOMENT_BASE_INDEX + (relativeN * LEDGERS_PER_MOMENT);
-
         if (!this.draftAudits)
             this.draftAudits = [];
+
         const draftAudits = await this.getDraftAuditRecords();
         if (draftAudits && draftAudits.length) {
-            for (const draftAudit of draftAudits) {
-                if (draftAudit.moment_start_idx < this.curMomentStartIdx)
-                    this.setAsDraft(draftAudit.moment_start_idx);
-                else {
-                    // Need to handle already created audit requests here.
+            // If there's expired audits, add them to tha draft list for expiration.
+            this.setAsDraft(...draftAudits.filter(a => a.moment_start_idx < this.curMomentStartIdx).map(a => a.moment_start_idx));
+            // If there's any pending audits handle them.
+            for (const draftAudit of draftAudits.filter(a => a.moment_start_idx == this.curMomentStartIdx)) {
+                switch (draftAudit.status) {
+                    case (AuditStatus.CREATED):
+                        // Send audit request.
+                        break;
+                    case (AuditStatus.CASHED):
+                        // Send redeem request.
+                        break;
+                    case (AuditStatus.REDEEMED):
+                        // Audit the instance.
+                        break;
+                    default:
+                        console.log('Invalid audit status for the db record', draftAudit.moment_start_idx);
+                        break;
                 }
             }
         }
-
     }
 
     async createAuditTableIfNotExists() {
@@ -197,7 +215,7 @@ class Auditor {
     }
 
     async getDraftAuditRecords() {
-        return (await this.db.getValues(this.auditTable, { status: AuditStatus.CREATED }));
+        return (await this.db.getValuesIn(this.auditTable, { status: [AuditStatus.CREATED, AuditStatus.CASHED, AuditStatus.REDEEMED] }));
     }
 
     async createAuditRecord(momentStartIdx) {
@@ -219,6 +237,19 @@ class Auditor {
         await this.db.updateValue(this.auditTable, { status: status }, { moment_start_idx: momentStartIdx });
     }
 
+    async updateAuditStatuses(status, ...momentStartIdxes) {
+        await this.db.updateValuesIn(this.auditTable, { status: status }, { moment_start_idx: momentStartIdxes });
+    }
+
+    getInstanceRequirements() {
+        return {
+            owner_pubkey: OWNER_PUBKEY,
+            contract_id: uuidv4(),
+            image: INSTANCE_IMAGE,
+            config: {}
+        }
+    }
+
     readConfig() {
         this.cfg = JSON.parse(fs.readFileSync(this.configPath).toString());
     }
@@ -226,25 +257,20 @@ class Auditor {
     persistConfig() {
         fs.writeFileSync(this.configPath, JSON.stringify(this.cfg, null, 2));
     }
+
+    logMessage(text, ...moments) {
+        console.log(moments.length == 1 ? 'Moment ' : 'Moments ', `${moments.join(', ')}: ${text}`);
+    }
 }
 
 async function main() {
-    const args = process.argv;
-
-    // This is used for logging purposes.
-    // Logs are formatted with the timestamp and a log file will be created inside log directory.
-    if (args.includes('--enable-logging'))
-        logger.init(LOG_PATH);
-
-    if (args.length < 3)
-        throw "Arguments mismatch.\n Usage: node auditor <ripple server url>";
-
-    console.log('Starting the auditor' + (args[3] == '--dev' ? ' (in dev mode)' : ''));
+    console.log('Starting the Evernode auditor.' + (IS_DEV_MODE ? ' (in dev mode)' : ''));
+    console.log('Data dir: ' + DATA_DIR);
+    console.log('Rippled server: ' + RIPPLED_URL);
 
     // Read Ripple Server Url.
-    const rippleServer = args[2];
-    const auditor = new Auditor(CONFIG_PATH, DB_PATH, rippleServer);
-    await auditor.init();
+    const auditor = new Auditor(CONFIG_PATH, DB_PATH);
+    await auditor.init(RIPPLED_URL);
 }
 
 main().catch(console.error);

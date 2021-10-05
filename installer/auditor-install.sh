@@ -53,8 +53,9 @@ echo "[Unit]
     User=root
     Group=root
     Type=simple
-    WorkingDirectory=$auditor_data
-    ExecStart=/bin/bash -c 'node $auditor_bin $xrpl_server_url --enable-logging'
+    WorkingDirectory=$auditor_bin
+    Environment=\"DATA_DIR=$auditor_data\"
+    ExecStart=/bin/bash -c 'node $auditor_bin'
     Restart=on-failure
     RestartSec=5
     [Install]
