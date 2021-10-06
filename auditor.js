@@ -114,7 +114,7 @@ class Auditor {
             if (auditRes) {
                 this.logMessage(momentStartIdx, `Audit success, token - ${hostInfo.currency}`);
                 await this.updateAuditStatus(momentStartIdx, AuditStatus.AUDITSUCCESS);
-                await this.sendAuditSuccess(hostInfo);
+                await this.sendAuditSuccess();
             }
             else {
                 this.logMessage(momentStartIdx, `Audit failed, token - ${hostInfo.currency}`);
@@ -160,6 +160,7 @@ class Auditor {
     }
 
     async sendAuditSuccess() {
+        return (await this.evernodeClient.auditSuccess());
     }
 
     async sendRedeemRequest(hostInfo) {
