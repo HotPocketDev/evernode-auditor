@@ -13,6 +13,7 @@ const DB_TABLE_NAME = 'audit_req';
 const MOMENT_BASE_INDEX = 0;
 const LEDGERS_PER_MOMENT = 72;
 
+// Instance requirement constants.
 const OWNER_PUBKEY = 'ed5cb83404120ac759609819591ef839b7d222c84f1f08b3012f490586159d2b50';
 const INSTANCE_IMAGE = 'hp.latest-ubt.20.04';
 
@@ -65,7 +66,7 @@ class Auditor {
             if ((this.lastValidatedLedgerIdx - MOMENT_BASE_INDEX) % LEDGERS_PER_MOMENT === 0) {
                 this.curMomentStartIdx = this.lastValidatedLedgerIdx;
                 // Start the audit cycle for the moment.
-                // Keep constant variable of momentStartIdx since curMomentStartIdx is changing.
+                // Keep constant variable of momentStartIdx for this execution since curMomentStartIdx is changing.
                 const momentStartIdx = this.curMomentStartIdx;
                 try { await this.auditCycle(momentStartIdx); }
                 catch (e) {
@@ -79,7 +80,7 @@ class Auditor {
         this.db.open();
 
         // Before this moment cycle, we expire the old draft audits.
-        this.expireTheDraftAudits();
+        this.expireDraftAudits();
 
         this.logMessage(momentStartIdx, 'Requesting for an audit.');
         await this.createAuditRecord(momentStartIdx);
@@ -88,7 +89,7 @@ class Auditor {
         try {
             const hostInfo = await this.sendAuditRequest();
 
-            // Check whether moment is expired after the response.
+            // Check whether moment is expired while waiting for the response.
             if (!this.checkMomentValidity(momentStartIdx))
                 return;
 
@@ -97,7 +98,7 @@ class Auditor {
             this.logMessage(momentStartIdx, `Redeeming from the host, token - ${hostInfo.currency}`);
             const instanceInfo = await this.sendRedeemRequest(hostInfo);
 
-            // Check whether moment is expired after the redeem.
+            // Check whether moment is expired while waiting for the redeem.
             if (!this.checkMomentValidity(momentStartIdx))
                 return;
 
@@ -106,7 +107,7 @@ class Auditor {
             this.logMessage(momentStartIdx, `Auditing the host, token - ${hostInfo.currency}`);
             const auditRes = await this.auditInstance(instanceInfo);
 
-            // Check whether moment is expired after the audit.
+            // Check whether moment is expired while waiting for the audit completion.
             if (!this.checkMomentValidity(momentStartIdx))
                 return;
 
@@ -146,11 +147,11 @@ class Auditor {
     }
 
     async auditInstance(instanceInfo) {
-        // Mocking the audit process of 10 seconds, This will be implemented later.
+        // Mocking the audit process of 1 minute, This will be implemented later.
         return new Promise(resolve => {
             setTimeout(() => {
                 resolve(true);
-            }, 10000);
+            }, 60000);
         });
     }
 
@@ -165,7 +166,7 @@ class Auditor {
         return (await this.evernodeClient.redeem(hostInfo.currency, hostInfo.address, hostInfo.amount, this.getInstanceRequirements()));
     }
 
-    async expireTheDraftAudits() {
+    async expireDraftAudits() {
         if (this.draftAudits && this.draftAudits.length) {
             this.logMessage(this.draftAudits.join(', '), 'Audit has been expired.');
             await this.updateAuditStatuses(AuditStatus.EXPIRED, ...this.draftAudits);
@@ -174,7 +175,7 @@ class Auditor {
     }
 
     async initMomentInfo() {
-        this.lastValidatedLedgerIdx = await this.rippleAPI.getLedgerVersion();
+        this.lastValidatedLedgerIdx = this.rippleAPI.ledgerVersion;
         const relativeN = (this.lastValidatedLedgerIdx - MOMENT_BASE_INDEX) / LEDGERS_PER_MOMENT;
         this.curMomentStartIdx = MOMENT_BASE_INDEX + (relativeN * LEDGERS_PER_MOMENT);
         if (!this.draftAudits)
@@ -183,8 +184,10 @@ class Auditor {
         const draftAudits = await this.getDraftAuditRecords();
         if (draftAudits && draftAudits.length) {
             // If there's expired audits, add them to tha draft list for expiration.
+            // So, their db status will be updated in the next audit cycle.
             this.setAsDraft(...draftAudits.filter(a => a.moment_start_idx < this.curMomentStartIdx).map(a => a.moment_start_idx));
-            // If there's any pending audits handle them.
+
+            // If there's any pending audits handle them. This will be implemented later.
             for (const draftAudit of draftAudits.filter(a => a.moment_start_idx == this.curMomentStartIdx)) {
                 switch (draftAudit.status) {
                     case (AuditStatus.CREATED):

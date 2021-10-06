@@ -1,5 +1,4 @@
 node_modules
 dist
-auditor.log
 auditor.cfg
 auditor.sqlite
