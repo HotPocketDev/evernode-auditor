@@ -4,7 +4,6 @@ const { EvernodeClient } = require('evernode-js-client');
 const { SqliteDatabase, DataTypes } = require('./lib/sqlite-handler');
 
 // Environment variables.
-const IS_DEV_MODE = process.env.DEV === "1";
 const RIPPLED_URL = process.env.RIPPLED_URL || "wss://hooks-testnet.xrpl-labs.com";
 const DATA_DIR = process.env.DATA_DIR || ".";
 
@@ -12,10 +11,10 @@ const CONFIG_PATH = DATA_DIR + '/auditor.cfg';
 const DB_PATH = DATA_DIR + '/auditor.sqlite';
 const DB_TABLE_NAME = 'audit_req';
 const MOMENT_BASE_INDEX = 0;
-const LEDGERS_PER_MOMENT = 5;
+const LEDGERS_PER_MOMENT = 72;
 
 const OWNER_PUBKEY = 'ed5cb83404120ac759609819591ef839b7d222c84f1f08b3012f490586159d2b50';
-const INSTANCE_IMAGE = 'hp.latest-ubt.20.04-njs.14';
+const INSTANCE_IMAGE = 'hp.latest-ubt.20.04';
 
 const Events = {
     LEDGER: 'ledger'
@@ -70,7 +69,7 @@ class Auditor {
                 const momentStartIdx = this.curMomentStartIdx;
                 try { await this.auditCycle(momentStartIdx); }
                 catch (e) {
-                    this.logMessage(e, momentStartIdx);
+                    this.logMessage(momentStartIdx, e);
                 }
             }
         });
@@ -82,7 +81,7 @@ class Auditor {
         // Before this moment cycle, we expire the old draft audits.
         this.expireTheDraftAudits();
 
-        this.logMessage('Requesting for an audit.', momentStartIdx);
+        this.logMessage(momentStartIdx, 'Requesting for an audit.');
         await this.createAuditRecord(momentStartIdx);
         this.setAsDraft(momentStartIdx);
 
@@ -95,7 +94,7 @@ class Auditor {
 
             await this.updateAuditCashed(momentStartIdx, hostInfo.currency);
 
-            this.logMessage(`Redeeming from the host, token - ${hostInfo.currency}`, momentStartIdx);
+            this.logMessage(momentStartIdx, `Redeeming from the host, token - ${hostInfo.currency}`);
             const instanceInfo = await this.sendRedeemRequest(hostInfo);
 
             // Check whether moment is expired after the redeem.
@@ -104,7 +103,7 @@ class Auditor {
 
             await this.updateAuditStatus(momentStartIdx, AuditStatus.REDEEMED);
 
-            this.logMessage(`Auditing the host, token - ${hostInfo.currency}`, momentStartIdx);
+            this.logMessage(momentStartIdx, `Auditing the host, token - ${hostInfo.currency}`);
             const auditRes = await this.auditInstance(instanceInfo);
 
             // Check whether moment is expired after the audit.
@@ -112,17 +111,17 @@ class Auditor {
                 return;
 
             if (auditRes) {
-                this.logMessage(`Host has passed the audit, token - ${hostInfo.currency}`, momentStartIdx);
+                this.logMessage(momentStartIdx, `Audit success, token - ${hostInfo.currency}`);
                 await this.updateAuditStatus(momentStartIdx, AuditStatus.AUDITSUCCESS);
                 await this.sendAuditSuccess(hostInfo);
             }
             else {
-                this.logMessage(`Host has failed the audit, token - ${hostInfo.currency}`, momentStartIdx);
+                this.logMessage(momentStartIdx, `Audit failed, token - ${hostInfo.currency}`);
                 await this.updateAuditStatus(momentStartIdx, AuditStatus.AUDITFAILED);
             }
         }
         catch (e) {
-            console.log(`Audit failed ${e}`, momentStartIdx);
+            this.logMessage(momentStartIdx, 'Audit error ', e);
             await this.updateAuditStatus(momentStartIdx, AuditStatus.FAILED);
         }
 
@@ -147,10 +146,11 @@ class Auditor {
     }
 
     async auditInstance(instanceInfo) {
+        // Mocking the audit process of 10 seconds, This will be implemented later.
         return new Promise(resolve => {
             setTimeout(() => {
                 resolve(true);
-            }, 5000);
+            }, 10000);
         });
     }
 
@@ -162,12 +162,12 @@ class Auditor {
     }
 
     async sendRedeemRequest(hostInfo) {
-        return (await this.evernodeClient.redeem(hostInfo.currency, hostInfo.address, hostInfo.amount, {}));
+        return (await this.evernodeClient.redeem(hostInfo.currency, hostInfo.address, hostInfo.amount, this.getInstanceRequirements()));
     }
 
     async expireTheDraftAudits() {
         if (this.draftAudits && this.draftAudits.length) {
-            this.logMessage('Audit has been expired.', ...this.draftAudits);
+            this.logMessage(this.draftAudits.join(', '), 'Audit has been expired.');
             await this.updateAuditStatuses(AuditStatus.EXPIRED, ...this.draftAudits);
             this.clearDraft();
         }
@@ -197,7 +197,7 @@ class Auditor {
                         // Audit the instance.
                         break;
                     default:
-                        console.log('Invalid audit status for the db record', draftAudit.moment_start_idx);
+                        this.logMessage(draftAudit.moment_start_idx, 'Invalid audit status for the db record');
                         break;
                 }
             }
@@ -258,13 +258,13 @@ class Auditor {
         fs.writeFileSync(this.configPath, JSON.stringify(this.cfg, null, 2));
     }
 
-    logMessage(text, ...moments) {
-        console.log(moments.length == 1 ? 'Moment ' : 'Moments ', `${moments.join(', ')}: ${text}`);
+    logMessage(momentStartIdx, ...msgArgs) {
+        console.log(`Moment start idx ${momentStartIdx}:`, ...msgArgs);
     }
 }
 
 async function main() {
-    console.log('Starting the Evernode auditor.' + (IS_DEV_MODE ? ' (in dev mode)' : ''));
+    console.log('Starting the Evernode auditor.');
     console.log('Data dir: ' + DATA_DIR);
     console.log('Rippled server: ' + RIPPLED_URL);
 
