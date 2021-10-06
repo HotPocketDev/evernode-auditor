@@ -6,10 +6,8 @@
         "build:installer": "npm run build && npm run build:installer:pre && tar cfz ./dist/auditor-installer.tar.gz --directory=./dist auditor-installer && rm -r ./dist/auditor-installer"
     },
     "dependencies": {
-        "eccrypto": "^1.1.6",
         "evernode-js-client": "0.0.17-alpha",
-        "ripple-lib": "^1.9.8",
-        "sqlite3": "^5.0.2",
-        "uuid": "^8.3.2"
+        "sqlite3": "5.0.2",
+        "uuid": "8.3.2"
     }
 }
