@@ -2,8 +2,7 @@
     "name": "auditor",
     "scripts": {
         "build": "npm install && ncc build auditor.js -o dist/auditor",
-        "build:installer:pre": "mkdir -p ./dist/auditor-installer && cp -r ./dist/auditor ./dist/auditor-installer/ && cp -r ./installer/auditor-install.sh ./dist/auditor-installer/ && cp -r ./installer/auditor-uninstall.sh ./dist/auditor-installer/",
-        "build:installer": "npm run build && npm run build:installer:pre && tar cfz ./dist/auditor-installer.tar.gz --directory=./dist auditor-installer && rm -r ./dist/auditor-installer"
+        "build:installer": "npm run build && ./installer-build.sh"
     },
     "dependencies": {
         "evernode-js-client": "0.0.17-alpha",

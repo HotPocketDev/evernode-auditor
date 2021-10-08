@@ -6,9 +6,13 @@ const { SqliteDatabase, DataTypes } = require('./lib/sqlite-handler');
 // Environment variables.
 const RIPPLED_URL = process.env.RIPPLED_URL || "wss://hooks-testnet.xrpl-labs.com";
 const DATA_DIR = process.env.DATA_DIR || ".";
+const IS_DEV_MODE = process.env.DEV === "1";
 
 const CONFIG_PATH = DATA_DIR + '/auditor.cfg';
 const DB_PATH = DATA_DIR + '/auditor.sqlite';
+const AUDITOR_CONTRACT_PATH = DATA_DIR + (IS_DEV_MODE ? '/dependencies/default-contract/default-contract.js' : '/auditor-contract');
+const AUDITOR_CLIENT_PATH = DATA_DIR + (IS_DEV_MODE ? '/dependencies/default-client/default-client.js' : '/auditor-client');
+const AUDITOR_CONTRACT_CONF = DATA_DIR + (IS_DEV_MODE ? '/dependencies/contract-template.config' : '/contract-template.config');
 const DB_TABLE_NAME = 'audit_req';
 const MOMENT_BASE_INDEX = 0;
 const LEDGERS_PER_MOMENT = 72;
@@ -105,7 +109,7 @@ class Auditor {
             await this.updateAuditStatus(momentStartIdx, AuditStatus.REDEEMED);
 
             this.logMessage(momentStartIdx, `Auditing the host, token - ${hostInfo.currency}`);
-            const auditRes = await this.auditInstance(instanceInfo);
+            const auditRes = await this.auditInstance(momentStartIdx, instanceInfo);
 
             // Check whether moment is expired while waiting for the audit completion.
             if (!this.checkMomentValidity(momentStartIdx))
@@ -146,11 +150,38 @@ class Auditor {
         return (momentStartIdx == this.curMomentStartIdx);
     }
 
-    async auditInstance(instanceInfo) {
+    async auditInstance(momentStartIdx, instanceInfo) {
+        try {
+            await this.uploadAuditorContract(instanceInfo);
+            const auditRes = await this.runAuditorContractClient(instanceInfo);
+            return auditRes;
+        }
+        catch (e) {
+            this.logMessage(momentStartIdx, e);
+            return false;
+        }
+    }
+
+    async uploadAuditorContract(instanceInfo) {
+        const contractPath = AUDITOR_CONTRACT_PATH;
+        const configPath = AUDITOR_CONTRACT_CONF;
+        // Update the config file with instance data and binary details.
+        // Create the zip contract bundle with contract and updated config.
+        // Then upload to the instance.
+        // Mocking the contract upload process, This will be implemented later.
+        return new Promise(resolve => {
+            setTimeout(() => {
+                resolve();
+            }, 1000);
+        });
+    }
+
+    async runAuditorContractClient(instanceInfo) {
+        const clientPath = AUDITOR_CLIENT_PATH;
         // Mocking the audit process of 1 minute, This will be implemented later.
         return new Promise(resolve => {
             setTimeout(() => {
-                resolve(true);
+                resolve();
             }, 60000);
         });
     }
@@ -268,7 +299,7 @@ class Auditor {
 }
 
 async function main() {
-    console.log('Starting the Evernode auditor.');
+    console.log('Starting the Evernode auditor.' + (IS_DEV_MODE ? ' (in dev mode)' : ''));
     console.log('Data dir: ' + DATA_DIR);
     console.log('Rippled server: ' + RIPPLED_URL);
 
