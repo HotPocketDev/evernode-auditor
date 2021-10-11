@@ -24,16 +24,16 @@ class AuditorClient {
             readRequests: [],
             contractInputs: []
         }
-        for (let [i, key] of Object.keys(resolvers['rr']).entries()) {
-            const rr = resolvers['rr'][key];
+        for (let [i, key] of Object.keys(this.resolvers['rr']).entries()) {
+            const rr = this.resolvers['rr'][key];
             auditOutput.readRequests.push({
                 input: rr.input,
                 success: rr.success,
                 time: rr.outTime ? `${rr.outTime - rr.inTime}ms` : null
             });
         }
-        for (let [i, key] of Object.keys(resolvers['ci']).entries()) {
-            const ci = resolvers['ci'][key]
+        for (let [i, key] of Object.keys(this.resolvers['ci']).entries()) {
+            const ci = this.resolvers['ci'][key]
             auditOutput.contractInputs.push({
                 input: ci.input,
                 success: ci.success,
@@ -57,11 +57,13 @@ class AuditorClient {
 
     handleInput = async (test, isReadRequest = false) => {
         let submitRes;
+        let key;
         const id = uuidv4();
         const input = JSON.stringify({
             id: id,
             input: test.input
         });
+        const inTime = new Date().getTime();
         if (isReadRequest) {
             key = 'rr';
             submitRes = await this.hpc.sendContractReadRequest(input);
@@ -71,9 +73,9 @@ class AuditorClient {
             submitRes = await this.hpc.submitContractInput(input);
         }
 
-        promises.push(new Promise((resolve, reject) => {
+        this.promises.push(new Promise((resolve, reject) => {
             let completed = false;
-            resolvers[key][id] = {
+            this.resolvers[key][id] = {
                 resolve: (e) => {
                     resolve(e);
                     completed = true;
@@ -82,7 +84,7 @@ class AuditorClient {
                     reject(e);
                     completed = true;
                 },
-                inTime: new Date().getTime(),
+                inTime: inTime,
                 input: test.input,
                 output: test.output,
                 success: false
@@ -96,14 +98,14 @@ class AuditorClient {
         if (!isReadRequest) {
             const submission = await submitRes.submissionStatus;
             if (submission.status != "accepted")
-                resolvers[key][id].reject(submission.reason);
+                this.resolvers[key][id].reject(submission.reason);
         }
     }
 
     handleOutput = (output, isReadRequest = false) => {
         const obj = JSON.parse(output);
         const id = obj.id;
-        const resolver = resolvers[isReadRequest ? 'rr' : 'ci'][id];
+        const resolver = this.resolvers[isReadRequest ? 'rr' : 'ci'][id];
         if (!resolver) {
             console.log('Output for unawaited input');
             return;
@@ -132,7 +134,7 @@ class AuditorClient {
         this.hpc = await HotPocket.createClient([`wss://${ip}:${userPort}`], keys, { protocol: HotPocket.protocols.bson });
 
         // Establish HotPocket connection.
-        if (!await hpc.connect()) {
+        if (!await this.hpc.connect()) {
             console.log('Returning false.....');
             console.log('Connection failed.');
             return false;
@@ -140,30 +142,29 @@ class AuditorClient {
         console.log('HotPocket Connected.');
 
         // This will get fired if HP server disconnects unexpectedly.
-        hpc.on(HotPocket.events.disconnect, () => {
+        this.hpc.on(HotPocket.events.disconnect, () => {
             console.log('Disconnected');
-            rl.close();
         })
 
         // This will get fired when contract sends an output.
-        hpc.on(HotPocket.events.contractOutput, (r) => {
+        this.hpc.on(HotPocket.events.contractOutput, (r) => {
             r.outputs.forEach(output => {
-                handleOutput(output);
+                this.handleOutput(output);
             });
         });
 
-        hpc.on(HotPocket.events.contractReadResponse, (output) => {
-            handleOutput(output, true);
+        this.hpc.on(HotPocket.events.contractReadResponse, (output) => {
+            this.handleOutput(output, true);
         });
 
         try {
             for (let test of this.tests) {
-                await handleInput(hpc, test);
-                await handleInput(hpc, test, true);
+                await this.handleInput(test);
+                await this.handleInput(test, true);
             }
 
-            await Promise.all(promises);
-            return returnAuditResult();
+            await Promise.all(this.promises);
+            return this.returnAuditResult();
         }
         catch (e) {
             console.log('Returning false.....');
