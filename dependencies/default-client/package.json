@@ -3,10 +3,11 @@
         "build": "ncc build default-client.js -o dist/default-client"
     },
     "dependencies": {
-        "libsodium-wrappers": "0.7.6",
         "blake3": "2.1.4",
-        "ws": "7.1.2",
-        "bson": "4.0.4"
+        "bson": "4.0.4",
+        "hotpocket-js-client": "^0.5.1",
+        "libsodium-wrappers": "0.7.6",
+        "ws": "7.1.2"
     },
     "devDependencies": {
         "terser": "5.7.0"

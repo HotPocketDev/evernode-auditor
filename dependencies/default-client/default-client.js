@@ -1,129 +1,198 @@
 const fs = require('fs');
-const readline = require('readline');
-const bson = require('bson');
-var path = require("path");
-const HotPocket = require('./lib/hp-client-lib');
+const { v4: uuidv4 } = require('uuid');
+const HotPocket = require('hotpocket-js-client');
 
-async function main() {
-    const workingDir = "datadir/";
+class AuditorClient {
+    constructor(workingDir, keyFile, auditTimeout, tests) {
+        this.auditTimeout = auditTimeout;
+        this.workingDir = workingDir;
+        this.keyFilePath = `${this.workingDir}/${keyFile}`;
+        this.tests = tests;
 
-    /**
-     * We persist the public key since we are hardcoding the public key in the messaging board.
-    */
-    if (!fs.existsSync(workingDir))
-        fs.mkdirSync(workingDir);
+        this.resolvers = {
+            rr: {},
+            ci: {}
+        };
+        this.promises = [];
 
-    const keyfile = workingDir + "sashimono-client.key";
-    const savedPrivateKey = fs.existsSync(keyfile) ? fs.readFileSync(keyfile, 'utf8') : null;
-    const keys = await HotPocket.generateKeys(savedPrivateKey);
-    fs.writeFileSync(keyfile, Buffer.from(keys.privateKey).toString("hex"));
-
-
-    const pkhex = Buffer.from(keys.publicKey).toString('hex');
-    console.log('My public key is: ' + pkhex);
-
-    let server = 'wss://localhost:8080'
-    if (process.argv.length == 3) server = 'wss://localhost:' + process.argv[2]
-    if (process.argv.length == 4) server = 'wss://' + process.argv[2] + ':' + process.argv[3]
-    const hpc = await HotPocket.createClient([server], keys, { protocol: HotPocket.protocols.bson });
-
-    // Establish HotPocket connection.
-    if (!await hpc.connect()) {
-        console.log('Connection failed.');
-        return;
+        if (!fs.existsSync(this.workingDir))
+            fs.mkdirSync(this.workingDir);
     }
-    console.log('HotPocket Connected.');
 
-    // start listening for stdin
-    const rl = readline.createInterface({
-        input: process.stdin,
-        output: process.stdout
-    });
+    returnAuditResult = () => {
+        const auditOutput = {
+            readRequests: [],
+            contractInputs: []
+        }
+        for (let [i, key] of Object.keys(resolvers['rr']).entries()) {
+            const rr = resolvers['rr'][key];
+            auditOutput.readRequests.push({
+                input: rr.input,
+                success: rr.success,
+                time: rr.outTime ? `${rr.outTime - rr.inTime}ms` : null
+            });
+        }
+        for (let [i, key] of Object.keys(resolvers['ci']).entries()) {
+            const ci = resolvers['ci'][key]
+            auditOutput.contractInputs.push({
+                input: ci.input,
+                success: ci.success,
+                time: ci.outTime ? `${ci.outTime - ci.inTime}ms` : null
+            });
+        }
 
-    // On ctrl + c we should close HP connection gracefully.
-    rl.on('SIGINT', () => {
-        console.log('SIGINT received...');
-        rl.close();
-        hpc.close();
-    });
+        if (!auditOutput.readRequests.find(o => !o.success) && !auditOutput.contractInputs.find(o => !o.success)) {
+            console.log('Returning true.....');
+            console.log('Audit success');
+            console.log(auditOutput);
+            return true;
+        }
+        else {
+            console.log('Returning false.....');
+            console.log('Audit failed');
+            console.log(auditOutput);
+            return false;
+        }
+    }
 
-    // This will get fired if HP server disconnects unexpectedly.
-    hpc.on(HotPocket.events.disconnect, () => {
-        console.log('Disconnected');
-        rl.close();
-    })
-
-    // This will get fired when contract sends an output.
-    hpc.on(HotPocket.events.contractOutput, (r) => {
-
-        r.outputs.forEach(output => {
-            // If bson.deserialize error occured it'll be caught by this try catch.
-            try {
-                const result = bson.deserialize(output);
-                if (result.type == "uploadResult") {
-                    if (result.status == "ok")
-                        console.log(`(ledger:${r.ledgerSeqNo})>> ${result.message}`);
-                    else
-                        console.log(`(ledger:${r.ledgerSeqNo})>> Zip upload failed. reason: ${result.status}`);
-                }
-                else if (result.type == "statusResult") {
-                    if (result.status == "ok")
-                        console.log(`(ledger:${r.ledgerSeqNo})>> ${result.message}`);
-                    else
-                        console.log(`(ledger:${r.ledgerSeqNo})>> Status failed. reason: ${result.status}`);
-                }
-                else {
-                    console.log("Unknown contract output.");
-                }
-            }
-            catch (e) {
-                console.log(e)
-            }
+    handleInput = async (test, isReadRequest = false) => {
+        let submitRes;
+        const id = uuidv4();
+        const input = JSON.stringify({
+            id: id,
+            input: test.input
         });
-    })
+        if (isReadRequest) {
+            key = 'rr';
+            submitRes = await this.hpc.sendContractReadRequest(input);
+        }
+        else {
+            key = 'ci';
+            submitRes = await this.hpc.submitContractInput(input);
+        }
 
-    console.log("Ready to accept inputs.");
-
-    const input_pump = () => {
-        rl.question('', async (inp) => {
-            if (inp.startsWith("status")) {
-                const input = await hpc.submitContractInput(bson.serialize({
-                    type: "status"
-                }));
-
-                const submission = await input.submissionStatus;
-                if (submission.status != "accepted")
-                    console.log("Status failed. reason: " + submission.reason);
+        promises.push(new Promise((resolve, reject) => {
+            let completed = false;
+            resolvers[key][id] = {
+                resolve: (e) => {
+                    resolve(e);
+                    completed = true;
+                },
+                reject: (e) => {
+                    reject(e);
+                    completed = true;
+                },
+                inTime: new Date().getTime(),
+                input: test.input,
+                output: test.output,
+                success: false
             }
-            else if (inp.startsWith("upload ")) {
+            setTimeout(() => {
+                if (!completed)
+                    reject('Input timeout reached.');
+            }, this.auditTimeout);
+        }));
 
-                const filePath = inp.substr(7);
-                const fileName = path.basename(filePath);
-                if (fs.existsSync(filePath)) {
-                    const fileContent = fs.readFileSync(filePath);
-                    const sizeKB = Math.round(fileContent.length / 1024);
-                    console.log("Uploading file " + fileName + " (" + sizeKB + " KB)");
-
-                    const input = await hpc.submitContractInput(bson.serialize({
-                        type: "upload",
-                        content: fileContent
-                    }));
-
-                    const submission = await input.submissionStatus;
-                    if (submission.status != "accepted")
-                        console.log("Upload failed. reason: " + submission.reason);
-                }
-                else
-                    console.log("File not found");
-            }
-            else {
-                console.log("Invalid command. [status] or [upload <local path>] expected.")
-            }
-
-            input_pump();
-        })
+        if (!isReadRequest) {
+            const submission = await submitRes.submissionStatus;
+            if (submission.status != "accepted")
+                resolvers[key][id].reject(submission.reason);
+        }
     }
-    input_pump();
+
+    handleOutput = (output, isReadRequest = false) => {
+        const obj = JSON.parse(output);
+        const id = obj.id;
+        const resolver = resolvers[isReadRequest ? 'rr' : 'ci'][id];
+        if (!resolver) {
+            console.log('Output for unawaited input');
+            return;
+        }
+
+        const receivedOutput = obj.output;
+        const actualOutput = resolver.output;
+        const ts = obj.ts;
+        resolver.outTime = new Date().getTime();
+        if (ts && (receivedOutput === actualOutput)) {
+            resolver.resolve(true);
+            resolver.success = true;
+        }
+        else
+            resolver.resolve(false);
+    }
+
+    audit = async (ip, userPort) => {
+        const savedPrivateKey = fs.existsSync(this.keyFilePath) ? fs.readFileSync(this.keyFilePath, 'utf8') : null;
+        const keys = await HotPocket.generateKeys(savedPrivateKey);
+        fs.writeFileSync(this.keyFilePath, Buffer.from(keys.privateKey).toString("hex"));
+
+        const pkhex = Buffer.from(keys.publicKey).toString('hex');
+        console.log('My public key is: ' + pkhex);
+
+        this.hpc = await HotPocket.createClient([`wss://${ip}:${userPort}`], keys, { protocol: HotPocket.protocols.bson });
+
+        // Establish HotPocket connection.
+        if (!await hpc.connect()) {
+            console.log('Returning false.....');
+            console.log('Connection failed.');
+            return false;
+        }
+        console.log('HotPocket Connected.');
+
+        // This will get fired if HP server disconnects unexpectedly.
+        hpc.on(HotPocket.events.disconnect, () => {
+            console.log('Disconnected');
+            rl.close();
+        })
+
+        // This will get fired when contract sends an output.
+        hpc.on(HotPocket.events.contractOutput, (r) => {
+            r.outputs.forEach(output => {
+                handleOutput(output);
+            });
+        });
+
+        hpc.on(HotPocket.events.contractReadResponse, (output) => {
+            handleOutput(output, true);
+        });
+
+        try {
+            for (let test of this.tests) {
+                await handleInput(hpc, test);
+                await handleInput(hpc, test, true);
+            }
+
+            await Promise.all(promises);
+            return returnAuditResult();
+        }
+        catch (e) {
+            console.log('Returning false.....');
+            console.log(e);
+            return false;
+        }
+    }
 }
 
-main();
+// Logic inside this audit function might deffer according to the audit.
+exports.audit = async (ip, userPort) => {
+    const testcases = [
+        {
+            input: 'gfdddfgfdf789sfkhjhhda][',
+            output: 'INVALID_INPUT'
+        },
+        {
+            input: 'sdfsdfsd(*)45',
+            output: 'sdfsdfsd'.repeat(45)
+        },
+        {
+            input: '564646546(*)100',
+            output: '564646546'.repeat(100)
+        },
+        {
+            input: 'sdfsdsgd654645fsd(*)500',
+            output: 'sdfsdsgd654645fsd'.repeat(500)
+        }
+    ];
+    const auditorClient = new AuditorClient("data", "client.key", 5000, testcases);
+    return (await auditorClient.audit(ip, userPort));
+}
