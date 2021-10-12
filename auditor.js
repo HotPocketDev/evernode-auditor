@@ -48,6 +48,9 @@ class Auditor {
         if (!fs.existsSync(clientPath))
             throw `${clientPath} does not exist.`
 
+        if (!fs.existsSync(this.contractPath))
+            throw `${this.contractPath} does not exist.`
+
         const { audit } = require(clientPath);
         this.audit = audit;
 
