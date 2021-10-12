@@ -19,7 +19,6 @@ const LEDGERS_PER_MOMENT = 72;
 
 // Instance requirement constants.
 const OWNER_PUBKEY = 'ed5cb83404120ac759609819591ef839b7d222c84f1f08b3012f490586159d2b50';
-const INSTANCE_IMAGE = 'hp.latest-ubt.20.04-njs.14';
 
 const Events = {
     LEDGER: 'ledger'
@@ -295,7 +294,7 @@ class Auditor {
         return {
             owner_pubkey: OWNER_PUBKEY,
             contract_id: uuidv4(),
-            image: INSTANCE_IMAGE,
+            image: this.cfg.instance.image,
             config: {}
         }
     }

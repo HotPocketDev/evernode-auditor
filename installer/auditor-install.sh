@@ -2,14 +2,15 @@
 # Auditor installation script.
 # This must be executed with root privileges.
 
-auditor_bin=/usr/bin/evernode-auditor
-auditor_data=/etc/evernode-auditor
+auditor_bin=/home/savinda/Documents/temp/bin/evernode-auditor
+auditor_data=/home/savinda/Documents/temp/etc
 auditor_conf="$auditor_data"/auditor.cfg
 auditor_contract="$auditor_data"/auditor-contract
 auditor_client="$auditor_data"/auditor-client
 auditor_service="evernode-auditor"
 hook_xrpl_addr="rb4H5w7H1QA2qKjHCRSuUey2fnMBGbN2c"
 script_dir=$(dirname "$(realpath "$0")")
+default_image="hp.latest-ubt.20.04-njs.14"
 
 xrpl_server_url="wss://hooks-testnet.xrpl-labs.com"
 
@@ -24,8 +25,8 @@ fi
 
 # Create bin dirs first so it automatically checks for privileged access.
 # Copying the binaries
-( ! cp -r "$script_dir"/auditor $auditor_bin ) && echo "Could not create '$auditor_bin'. Make sure you are running as sudo." && exit 1
-( ! mkdir -p $auditor_data ) && echo "Could not create '$auditor_data'. Make sure you are running as sudo." && exit 1
+(! cp -r "$script_dir"/auditor $auditor_bin) && echo "Could not create '$auditor_bin'. Make sure you are running as sudo." && exit 1
+(! mkdir -p $auditor_data) && echo "Could not create '$auditor_data'. Make sure you are running as sudo." && exit 1
 
 function rollback() {
     echo "Rolling back auditor installation."
@@ -47,23 +48,28 @@ while [ -z "$secret" ] || [[ ! "$secret" =~ ^[A-Za-z0-9]{29}$ ]]; do
     ([ -z "$secret" ] && echo "Xrpl secret cannot be empty.") || ([[ ! "$secret" =~ ^[A-Za-z0-9]{29}$ ]] && echo "Invalid xrpl secret.")
 done
 
-(! echo "{\"xrpl\":{\"address\":\"$address\",\"secret\":\"$secret\",\"hookAddress\":\"$hook_xrpl_addr\"}}" | jq . >$auditor_conf) && rollback
+(! echo "{\"xrpl\":{\"address\":\"$address\",\"secret\":\"$secret\",\"hookAddress\":\"$hook_xrpl_addr\"},\"instance\":{\"image\":\"$default_image\"}}" | jq . >$auditor_conf) && rollback
 
 #Setting up the audit contract.
 echo "Setting up the audit contract..."
-( ! mkdir -p $auditor_contract ) && echo "Could not create '$auditor_contract'. Make sure you are running as sudo." && rollback
-( ! mkdir -p $auditor_client ) && echo "Could not create '$auditor_client'. Make sure you are running as sudo." && rollback
+(! mkdir -p $auditor_contract) && echo "Could not create '$auditor_contract'. Make sure you are running as sudo." && rollback
+(! mkdir -p $auditor_client) && echo "Could not create '$auditor_client'. Make sure you are running as sudo." && rollback
 
 echo "Do you want to setup a custom audit contract?"
 read -p "Type 'yes' to upload custom audit contract: " confirmation </dev/tty
 if [ "$confirmation" == "yes" ]; then
     # Upload custom contract code goes here.
     echo "Setting up the custom audit contract..."
+    while [ -z "$image_name" ] || [[ ! "$image_name" =~ ^hp. ]]; do
+        read -p "HP image name? " image_name </dev/tty
+        ([ -z "$image_name" ] && echo "Image name cannot be empty.") || ([[ ! "$image_name" =~ ^hp. ]] && echo "This is not a hp image name")
+    done
+    (jq --arg img "$image_name" '.instance.image = $img' $auditor_conf >$auditor_conf.tmp && mv $auditor_conf.tmp $auditor_conf) || (echo "Couldn't update config file" && rollback)
 else
     echo "Setting up the default audit contract..."
-    ( ! cp -r "$script_dir"/default-contract/* $auditor_contract ) && echo "Error copying the default contract." && rollback
-    ( ! cp -r "$script_dir"/default-client/* $auditor_client ) && echo "Error copying the default client." && rollback
-    ( ! cp -r "$script_dir"/contract-template.config $auditor_data ) && echo "Error copying the contract config template." && rollback
+    (! cp -r "$script_dir"/default-contract/* $auditor_contract) && echo "Error copying the default contract." && rollback
+    (! cp -r "$script_dir"/default-client/* $auditor_client) && echo "Error copying the default client." && rollback
+    (! cp -r "$script_dir"/contract-template.config $auditor_data) && echo "Error copying the contract config template." && rollback
 fi
 
 # Install auditor systemd service.
