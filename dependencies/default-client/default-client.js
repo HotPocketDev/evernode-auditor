@@ -1,4 +1,5 @@
 const fs = require('fs');
+const path = require('path');
 const { v4: uuidv4 } = require('uuid');
 const HotPocket = require('hotpocket-js-client');
 
@@ -6,7 +7,7 @@ class AuditorClient {
     constructor(workingDir, keyFile, auditTimeout, tests) {
         this.auditTimeout = auditTimeout;
         this.workingDir = workingDir;
-        this.keyFilePath = `${this.workingDir}/${keyFile}`;
+        this.keyFilePath = path.resolve(__dirname, `${this.workingDir}/${keyFile}`);
         this.tests = tests;
 
         this.resolvers = {
@@ -124,40 +125,42 @@ class AuditorClient {
     }
 
     audit = async (ip, userPort) => {
-        const savedPrivateKey = fs.existsSync(this.keyFilePath) ? fs.readFileSync(this.keyFilePath, 'utf8') : null;
-        const keys = await HotPocket.generateKeys(savedPrivateKey);
-        fs.writeFileSync(this.keyFilePath, Buffer.from(keys.privateKey).toString("hex"));
-
-        const pkhex = Buffer.from(keys.publicKey).toString('hex');
-        console.log('My public key is: ' + pkhex);
-
-        this.hpc = await HotPocket.createClient([`wss://${ip}:${userPort}`], keys, { protocol: HotPocket.protocols.bson });
-
-        // Establish HotPocket connection.
-        if (!await this.hpc.connect()) {
-            console.log('Returning false.....');
-            console.log('Connection failed.');
-            return false;
-        }
-        console.log('HotPocket Connected.');
-
-        // This will get fired if HP server disconnects unexpectedly.
-        this.hpc.on(HotPocket.events.disconnect, () => {
-            console.log('Disconnected');
-        })
-
-        // This will get fired when contract sends an output.
-        this.hpc.on(HotPocket.events.contractOutput, (r) => {
-            r.outputs.forEach(output => {
-                this.handleOutput(output);
-            });
-        });
-
-        this.hpc.on(HotPocket.events.contractReadResponse, (output) => {
-            this.handleOutput(output, true);
-        });
-
         try {
+            const savedPrivateKey = fs.existsSync(this.keyFilePath) ? fs.readFileSync(this.keyFilePath, 'utf8') : null;
+            const keys = await HotPocket.generateKeys(savedPrivateKey);
+            if (!fs.existsSync(path.dirname(this.keyFilePath)))
+                fs.mkdirSync(path.dirname(this.keyFilePath));
+            fs.writeFileSync(this.keyFilePath, Buffer.from(keys.privateKey).toString("hex"));
+
+            const pkhex = Buffer.from(keys.publicKey).toString('hex');
+            console.log('My public key is: ' + pkhex);
+
+            this.hpc = await HotPocket.createClient([`wss://${ip}:${userPort}`], keys, { protocol: HotPocket.protocols.bson });
+
+            // Establish HotPocket connection.
+            if (!await this.hpc.connect()) {
+                console.log('Returning false.....');
+                console.log('Connection failed.');
+                return false;
+            }
+            console.log('HotPocket Connected.');
+
+            // This will get fired if HP server disconnects unexpectedly.
+            this.hpc.on(HotPocket.events.disconnect, () => {
+                console.log('Disconnected');
+            })
+
+            // This will get fired when contract sends an output.
+            this.hpc.on(HotPocket.events.contractOutput, (r) => {
+                r.outputs.forEach(output => {
+                    this.handleOutput(output);
+                });
+            });
+
+            this.hpc.on(HotPocket.events.contractReadResponse, (output) => {
+                this.handleOutput(output, true);
+            });
+
             for (let test of this.tests) {
                 await this.handleInput(test);
                 await this.handleInput(test, true);
@@ -178,20 +181,20 @@ class AuditorClient {
 exports.audit = async (ip, userPort) => {
     const testcases = [
         {
-            input: 'gfdddfgfdf789sfkhjhhda][',
+            input: 'This is invalid input [||]',
             output: 'INVALID_INPUT'
         },
         {
-            input: 'sdfsdfsd(*)45',
-            output: 'sdfsdfsd'.repeat(45)
+            input: 'This is valid input(*)45',
+            output: 'This is valid input'.repeat(45)
         },
         {
-            input: '564646546(*)100',
-            output: '564646546'.repeat(100)
+            input: '1234567891011121314151617181920(*)100',
+            output: '1234567891011121314151617181920'.repeat(100)
         },
         {
-            input: 'sdfsdsgd654645fsd(*)500',
-            output: 'sdfsdsgd654645fsd'.repeat(500)
+            input: 'This is valid input 1234567891011121314151617181920(*)500',
+            output: 'This is valid input 1234567891011121314151617181920'.repeat(500)
         }
     ];
     const auditorClient = new AuditorClient("data", "client.key", 5000, testcases);

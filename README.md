@@ -18,3 +18,11 @@ A node js version of evernode auditor
 
 ## Generating setup package
 1. `npm run build:installer` will create `dist/auditor-installer.tar.gz`
+
+## Auditing
+1. Default auditing contract and it's client will be setup in installation if no constomized contract is provided.
+1. The audit contract client should have implemented an export audit function which wrapped the audit process.
+1. The audit function should return a boolean (true on audit sucess and false on audit failure).
+```
+exports.audit = async (ip, userPort) => {}
+```

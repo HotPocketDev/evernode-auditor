@@ -34,7 +34,7 @@ const auditContract = async (ctx) => {
                 const msg = JSON.parse(buf);
 
                 let output;
-                if (!(/^([a-z0-9]{5,}\(\*\)[0-9]*)$/.test(msg.input))) {
+                if (!(/^([a-zA-Z0-9\s]{5,}\(\*\)[0-9]*)$/.test(msg.input))) {
                     output = {
                         id: msg.id,
                         output: "INVALID_INPUT",
