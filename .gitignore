@@ -2,3 +2,5 @@ node_modules
 dist
 auditor.cfg
 auditor.sqlite
+datadir
+bundle.zip

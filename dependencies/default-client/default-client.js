@@ -7,7 +7,7 @@ class AuditorClient {
     constructor(workingDir, keyFile, auditTimeout, tests) {
         this.auditTimeout = auditTimeout;
         this.workingDir = workingDir;
-        this.keyFilePath = path.resolve(__dirname, `${this.workingDir}/${keyFile}`);
+        this.keyFilePath = `${this.workingDir}/${keyFile}`;
         this.tests = tests;
 
         this.resolvers = {
@@ -211,6 +211,7 @@ exports.audit = async (ip, userPort) => {
             output: 'This is valid input 1234567891011121314151617181920'.repeat(500)
         }
     ];
-    const auditorClient = new AuditorClient("data", "client.key", 5000, testcases);
+    const dataPath = path.join(__dirname, 'data');
+    const auditorClient = new AuditorClient(dataPath, "client.key", 5000, testcases);
     return (await auditorClient.audit(ip, userPort));
 }

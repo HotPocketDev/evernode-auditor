@@ -10,6 +10,7 @@ if [ "$1" != "installer" ]; then
     # Build default audit client and contract
     ncc build ./dependencies/default-client/default-client.js -o dist/default-client
     ncc build ./dependencies/default-contract/default-contract.js -o dist/default-contract
+    cp ./dependencies/default-contract/contract.config dist/default-contract
 else
     # Create installer directories.
     mkdir -p ./dist/auditor-installer
@@ -20,9 +21,6 @@ else
     cp -r ./dist/default-contract ./dist/auditor-installer/
     cp -r ./installer/auditor-install.sh ./dist/auditor-installer/
     cp -r ./installer/auditor-uninstall.sh ./dist/auditor-installer/
-
-    # Copy dependencies to the installer directory.
-    cp -r ./dependencies/contract-template.config ./dist/auditor-installer/
 
     # Create the bundle and remove directory.
     tar cfz ./dist/auditor-installer.tar.gz --directory=./dist auditor-installer
