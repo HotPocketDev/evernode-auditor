@@ -21,6 +21,7 @@ class AuditorClient {
     }
 
     returnAuditResult = () => {
+        // Just create a resultset for loggin purpose.
         const auditOutput = {
             readRequests: [],
             contractInputs: []
@@ -42,6 +43,7 @@ class AuditorClient {
             });
         }
 
+        // If all the results are success, return true.
         if (!auditOutput.readRequests.find(o => !o.success) && !auditOutput.contractInputs.find(o => !o.success)) {
             console.log('Returning true.....');
             console.log('Audit success');
@@ -57,6 +59,8 @@ class AuditorClient {
     }
 
     handleInput = async (test, isReadRequest = false) => {
+        // Send contract inputs and read requests.
+        // Prepare promises and resolvers.
         let submitRes;
         let key;
         const id = uuidv4();
@@ -76,6 +80,7 @@ class AuditorClient {
 
         this.promises.push(new Promise((resolve, reject) => {
             let completed = false;
+            // Resolvers are stores against the input id.
             this.resolvers[key][id] = {
                 resolve: (e) => {
                     resolve(e);
@@ -104,6 +109,7 @@ class AuditorClient {
     }
 
     handleOutput = (output, isReadRequest = false) => {
+        // Validate received outputs and handle the resolvers.
         const obj = JSON.parse(output);
         const id = obj.id;
         const resolver = this.resolvers[isReadRequest ? 'rr' : 'ci'][id];
@@ -125,7 +131,9 @@ class AuditorClient {
     }
 
     audit = async (ip, userPort) => {
+        // Full audit process.
         try {
+            // Generate or fetch existing keys.
             const savedPrivateKey = fs.existsSync(this.keyFilePath) ? fs.readFileSync(this.keyFilePath, 'utf8') : null;
             const keys = await HotPocket.generateKeys(savedPrivateKey);
             if (!fs.existsSync(path.dirname(this.keyFilePath)))
@@ -138,6 +146,7 @@ class AuditorClient {
             this.hpc = await HotPocket.createClient([`wss://${ip}:${userPort}`], keys, { protocol: HotPocket.protocols.bson });
 
             // Establish HotPocket connection.
+            // If failed audit process is failed.
             if (!await this.hpc.connect()) {
                 console.log('Returning false.....');
                 console.log('Connection failed.');
@@ -157,16 +166,20 @@ class AuditorClient {
                 });
             });
 
+            // This will get fired when contract sends an read request result.
             this.hpc.on(HotPocket.events.contractReadResponse, (output) => {
                 this.handleOutput(output, true);
             });
 
+            // Send test inputs and read requests.
             for (let test of this.tests) {
                 await this.handleInput(test);
                 await this.handleInput(test, true);
             }
 
+            // Wait for the result.
             await Promise.all(this.promises);
+            // Log output and return.
             return this.returnAuditResult();
         }
         catch (e) {
@@ -179,6 +192,7 @@ class AuditorClient {
 
 // Logic inside this audit function might deffer according to the audit.
 exports.audit = async (ip, userPort) => {
+    // Test inputs and expected output.
     const testcases = [
         {
             input: 'This is invalid input [||]',

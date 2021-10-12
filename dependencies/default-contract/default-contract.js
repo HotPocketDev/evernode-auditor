@@ -33,6 +33,10 @@ const auditContract = async (ctx) => {
                 const buf = await ctx.users.read(input);
                 const msg = JSON.parse(buf);
 
+                // Contract logic is to reapeat a string and concat.
+                // Input pattern should be {some text}(*){number of times}.
+                // If input does not match the patter return error.
+                // Input id is forwarded so client side can identify the outputs respective to the input.
                 let output;
                 if (!(/^([a-zA-Z0-9\s]{5,}\(\*\)[0-9]*)$/.test(msg.input))) {
                     output = {
