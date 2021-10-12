@@ -55,7 +55,7 @@ echo "Setting up the audit contract..."
 ( ! mkdir -p $auditor_client ) && echo "Could not create '$auditor_client'. Make sure you are running as sudo." && rollback
 
 echo "Do you want to setup a custom audit contract?"
-read -p "Type 'yes' to confirm uninstall: " confirmation </dev/tty
+read -p "Type 'yes' to upload custom audit contract: " confirmation </dev/tty
 if [ "$confirmation" == "yes" ]; then
     # Upload custom contract code goes here.
     echo "Setting up the custom audit contract..."
