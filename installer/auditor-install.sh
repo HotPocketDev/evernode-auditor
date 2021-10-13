@@ -12,8 +12,6 @@ hook_xrpl_addr="rb4H5w7H1QA2qKjHCRSuUey2fnMBGbN2c"
 script_dir=$(dirname "$(realpath "$0")")
 default_image="hp.latest-ubt.20.04-njs.14"
 
-xrpl_server_url="wss://hooks-testnet.xrpl-labs.com"
-
 [ -d $auditor_bin ] && [ -n "$(ls -A $auditor_bin)" ] &&
     echo "Aborting installation. Previous Auditor installation detected at $auditor_bin" && exit 1
 
