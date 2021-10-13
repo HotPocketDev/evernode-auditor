@@ -17,6 +17,13 @@ xrpl_server_url="wss://hooks-testnet.xrpl-labs.com"
 [ -d $auditor_bin ] && [ -n "$(ls -A $auditor_bin)" ] &&
     echo "Aborting installation. Previous Auditor installation detected at $auditor_bin" && exit 1
 
+# Abort if nodejs 14 not exists.
+if ( ! command -v node &>/dev/null ) || [[ ! $(node -v) =~ v14\..* ]]; then
+    echo "Aborting installation. Node js version 14 not installed in this machine."
+    echo "Install node js version 14 and retry."
+    exit 1
+fi
+
 # jq command is used for json manipulation.
 if ! command -v jq &>/dev/null; then
     echo "jq utility not found. Installing.."

@@ -317,7 +317,6 @@ async function main() {
     console.log('Data dir: ' + DATA_DIR);
     console.log('Rippled server: ' + RIPPLED_URL);
 
-    // Read Ripple Server Url.
     const auditor = new Auditor(CONFIG_PATH, DB_PATH, AUDITOR_CONTRACT_PATH, AUDITOR_CLIENT_PATH);
     await auditor.init(RIPPLED_URL);
 }
