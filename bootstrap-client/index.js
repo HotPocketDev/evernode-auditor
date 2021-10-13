@@ -59,7 +59,7 @@ class BootstrapClient {
             const submission = await input.submissionStatus;
             if (submission.status != "accepted") {
                 console.log("Status failed. reason: " + submission.reason);
-                reject(false);
+                resolve(false);
             }
 
             this.hpc.on(HotPocket.events.contractOutput, (r) => {
@@ -74,7 +74,7 @@ class BootstrapClient {
                             }
                             else {
                                 console.log(`(ledger:${r.ledgerSeqNo})>> Status failed. reason: ${result.status}`);
-                                reject(false);
+                                resolve(false);
                             }
                         }
                     }
@@ -121,7 +121,7 @@ class BootstrapClient {
                 const submission = await input.submissionStatus;
                 if (submission.status != "accepted") {
                     console.log("Upload failed. reason: " + submission.reason);
-                    reject(false);
+                    resolve(false);
                 }
 
                 this.hpc.on(HotPocket.events.contractOutput, (r) => {
@@ -136,7 +136,7 @@ class BootstrapClient {
                                 }
                                 else {
                                     console.log(`(ledger:${r.ledgerSeqNo})>> Zip upload failed. reason: ${result.status}`);
-                                    reject(false);
+                                    resolve(false);
                                 }
                             }
                         }
@@ -148,8 +148,8 @@ class BootstrapClient {
                 })
             }
             else {
-                console.log("File not found");
-                reject(false);
+                console.log("Zip bundle not found");
+                resolve(false);
             }
         });
     }

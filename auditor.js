@@ -167,7 +167,7 @@ class Auditor {
         const redeemThreshold = LEDGERS_PER_MOMENT / 2;
         if (ledgerTimeTook >= redeemThreshold)
         {
-            console.log(`Redeem took too long. (Took: ${ledgerTimeTook} Threshold: ${redeemThreshold}) Audit failed`);
+            console.error(`Redeem took too long. (Took: ${ledgerTimeTook} Threshold: ${redeemThreshold}) Audit failed`);
             return false;
         }
         try {
@@ -175,22 +175,26 @@ class Auditor {
             // Checking connection with bootstrap contract succeeds.
             const connectSuccess = await client.connect();
             if (!connectSuccess) {
+                console.error('Bootstrap contract connection failed.');
                 return false;
             }
             // Checking wether the bootstrap contract is alive.
             const isBootstrapRunning = await client.checkStatus();
             if (!isBootstrapRunning) {
+                console.error('Bootstrap contract status is not live.');
                 return false;
             }
             // Checking the file upload success to bootstrap contract.
             const uploadSuccess = await client.uploadContract();
             if (!uploadSuccess) {
+                console.error('Contract upload failed.');
                 return false;
             }
 
             // Run custom auditor contract related logic.
             const auditLogicSuccess = await this.audit(instanceInfo.ip, instanceInfo.user_port);
             if (!auditLogicSuccess) {
+                console.error('Custom audit process informed fail status.');
                 return false;
             }
             return true;
