@@ -169,54 +169,47 @@ class Auditor {
             console.error(`Redeem took too long. (Took: ${ledgerTimeTook} Threshold: ${redeemThreshold}) Audit failed`);
             return false;
         }
-        try {
-            const client = new BootstrapClient(instanceInfo, this.contractPath);
-            // Checking connection with bootstrap contract succeeds.
-            const connectSuccess = await client.connect();
+        const client = new BootstrapClient(instanceInfo, this.contractPath);
+        // Checking connection with bootstrap contract succeeds.
+        const connectSuccess = await client.connect();
 
-            if (!this.checkMomentValidity(momentStartIdx))
-                throw 'Moment expired while waiting for the host connection.';
+        if (!this.checkMomentValidity(momentStartIdx))
+            throw 'Moment expired while waiting for the host connection.';
 
-            if (!connectSuccess) {
-                console.error('Bootstrap contract connection failed.');
-                return false;
-            }
-
-            // Checking whether the bootstrap contract is alive.
-            const isBootstrapRunning = await client.checkStatus();
-
-            momentStartIdx = 50;
-
-            if (!this.checkMomentValidity(momentStartIdx))
-                throw 'Moment expired while waiting for the bootstrap contract status.';
-
-            if (!isBootstrapRunning) {
-                console.error('Bootstrap contract status is not live.');
-                return false;
-            }
-
-            // Checking the file upload to bootstrap contract succeeded.
-            const uploadSuccess = await client.uploadContract();
-
-            if (!this.checkMomentValidity(momentStartIdx))
-                throw 'Moment expired while uploading the contract bundle.';
-
-            if (!uploadSuccess) {
-                console.error('Contract upload failed.');
-                return false;
-            }
-
-            // Run custom auditor contract related logic.
-            const auditLogicSuccess = await this.audit(instanceInfo.ip, instanceInfo.user_port);
-            if (!auditLogicSuccess) {
-                console.error('Custom audit process informed fail status.');
-                return false;
-            }
-            return true;
-        } catch (error) {
-            console.error(error);
-            throw error;
+        if (!connectSuccess) {
+            console.error('Bootstrap contract connection failed.');
+            return false;
         }
+
+        // Checking whether the bootstrap contract is alive.
+        const isBootstrapRunning = await client.checkStatus();
+
+        if (!this.checkMomentValidity(momentStartIdx))
+            throw 'Moment expired while waiting for the bootstrap contract status.';
+
+        if (!isBootstrapRunning) {
+            console.error('Bootstrap contract status is not live.');
+            return false;
+        }
+
+        // Checking the file upload to bootstrap contract succeeded.
+        const uploadSuccess = await client.uploadContract();
+
+        if (!this.checkMomentValidity(momentStartIdx))
+            throw 'Moment expired while uploading the contract bundle.';
+
+        if (!uploadSuccess) {
+            console.error('Contract upload failed.');
+            return false;
+        }
+
+        // Run custom auditor contract related logic.
+        const auditLogicSuccess = await this.audit(instanceInfo.ip, instanceInfo.user_port);
+        if (!auditLogicSuccess) {
+            console.error('Custom audit process informed fail status.');
+            return false;
+        }
+        return true;
     }
 
     async sendAuditRequest() {
