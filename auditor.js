@@ -57,7 +57,7 @@ class Auditor {
 
     async init(rippleServer) {
         this.readConfig();
-        if (!this.cfg.xrpl.address || !this.cfg.xrpl.secret || !this.cfg.xrpl.hookAddress)
+        if (!this.cfg.xrpl.address || !this.cfg.xrpl.secret || !this.cfg.xrpl.hookAddress || !this.cfg.instance.image)
             throw "Required cfg fields cannot be empty.";
 
         this.evernodeClient = new EvernodeClient(this.cfg.xrpl.address, this.cfg.xrpl.secret, { hookAddress: this.cfg.xrpl.hookAddress, rippledServer: rippleServer });
@@ -104,7 +104,7 @@ class Auditor {
 
             // Check whether moment is expired while waiting for the response.
             if (!this.checkMomentValidity(momentStartIdx))
-                return;
+                throw 'Moment expired while waiting for the audit response.';
 
             await this.updateAuditCashed(momentStartIdx, hostInfo.currency);
 
@@ -116,16 +116,16 @@ class Auditor {
 
             // Check whether moment is expired while waiting for the redeem.
             if (!this.checkMomentValidity(momentStartIdx))
-                return;
+                throw 'Moment expired while waiting for the redeem response.';
 
             await this.updateAuditStatus(momentStartIdx, AuditStatus.REDEEMED);
 
             this.logMessage(momentStartIdx, `Auditing the host, token - ${hostInfo.currency}`);
-            const auditRes = await this.auditInstance(instanceInfo, ledgerTimeTook);
+            const auditRes = await this.auditInstance(instanceInfo, ledgerTimeTook, momentStartIdx);
 
             // Check whether moment is expired while waiting for the audit completion.
             if (!this.checkMomentValidity(momentStartIdx))
-                return;
+                throw 'Moment expired while waiting for the audit checks.';
 
             if (auditRes) {
                 this.logMessage(momentStartIdx, `Audit success, token - ${hostInfo.currency}`);
@@ -138,7 +138,7 @@ class Auditor {
             }
         }
         catch (e) {
-            this.logMessage(momentStartIdx, 'Audit error ', e);
+            this.logMessage(momentStartIdx, 'Audit error - ', e);
             await this.updateAuditStatus(momentStartIdx, AuditStatus.FAILED);
         }
 
@@ -162,11 +162,10 @@ class Auditor {
         return (momentStartIdx == this.curMomentStartIdx);
     }
 
-    async auditInstance(instanceInfo, ledgerTimeTook) {
+    async auditInstance(instanceInfo, ledgerTimeTook, momentStartIdx) {
         // Redeem audit threshold is take as half the moment size.
         const redeemThreshold = LEDGERS_PER_MOMENT / 2;
-        if (ledgerTimeTook >= redeemThreshold)
-        {
+        if (ledgerTimeTook >= redeemThreshold) {
             console.error(`Redeem took too long. (Took: ${ledgerTimeTook} Threshold: ${redeemThreshold}) Audit failed`);
             return false;
         }
@@ -174,18 +173,34 @@ class Auditor {
             const client = new BootstrapClient(instanceInfo, this.contractPath);
             // Checking connection with bootstrap contract succeeds.
             const connectSuccess = await client.connect();
+
+            if (!this.checkMomentValidity(momentStartIdx))
+                throw 'Moment expired while waiting for the host connection.';
+
             if (!connectSuccess) {
                 console.error('Bootstrap contract connection failed.');
                 return false;
             }
-            // Checking wether the bootstrap contract is alive.
+
+            // Checking whether the bootstrap contract is alive.
             const isBootstrapRunning = await client.checkStatus();
+
+            momentStartIdx = 50;
+
+            if (!this.checkMomentValidity(momentStartIdx))
+                throw 'Moment expired while waiting for the bootstrap contract status.';
+
             if (!isBootstrapRunning) {
                 console.error('Bootstrap contract status is not live.');
                 return false;
             }
-            // Checking the file upload success to bootstrap contract.
+
+            // Checking the file upload to bootstrap contract succeeded.
             const uploadSuccess = await client.uploadContract();
+
+            if (!this.checkMomentValidity(momentStartIdx))
+                throw 'Moment expired while uploading the contract bundle.';
+
             if (!uploadSuccess) {
                 console.error('Contract upload failed.');
                 return false;
@@ -200,7 +215,7 @@ class Auditor {
             return true;
         } catch (error) {
             console.error(error);
-            return false;
+            throw error;
         }
     }
 

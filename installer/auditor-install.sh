@@ -75,23 +75,6 @@ else
     (! cp -r "$script_dir"/default-client/* $auditor_client) && echo "Error copying the default client." && rollback
 fi
 
-#Setting up the audit contract.
-echo "Setting up the audit contract..."
-( ! mkdir -p $auditor_contract ) && echo "Could not create '$auditor_contract'. Make sure you are running as sudo." && rollback
-( ! mkdir -p $auditor_client ) && echo "Could not create '$auditor_client'. Make sure you are running as sudo." && rollback
-
-echo "Do you want to setup a custom audit contract?"
-read -p "Type 'yes' to upload custom audit contract: " confirmation </dev/tty
-if [ "$confirmation" == "yes" ]; then
-    # Upload custom contract code goes here.
-    echo "Setting up the custom audit contract..."
-else
-    echo "Setting up the default audit contract..."
-    ( ! cp -r "$script_dir"/default-contract/* $auditor_contract ) && echo "Error copying the default contract." && rollback
-    ( ! cp -r "$script_dir"/default-client/* $auditor_client ) && echo "Error copying the default client." && rollback
-    ( ! cp -r "$script_dir"/contract-template.config $auditor_data ) && echo "Error copying the contract config template." && rollback
-fi
-
 # Install auditor systemd service.
 # StartLimitIntervalSec=0 to make unlimited retries. RestartSec=5 is to keep 5 second gap between restarts.
 echo "[Unit]
