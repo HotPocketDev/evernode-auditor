@@ -2,8 +2,8 @@
 # Auditor installation script.
 # This must be executed with root privileges.
 
-auditor_bin=/home/savinda/Documents/temp/bin/evernode-auditor
-auditor_data=/home/savinda/Documents/temp/etc
+auditor_bin=/usr/bin/evernode-auditor
+auditor_data=/etc/evernode-auditor
 auditor_conf="$auditor_data"/auditor.cfg
 auditor_contract="$auditor_data"/auditor-contract
 auditor_client="$auditor_data"/auditor-client
@@ -76,7 +76,6 @@ else
     echo "Setting up the default audit contract..."
     (! cp -r "$script_dir"/default-contract/* $auditor_contract) && echo "Error copying the default contract." && rollback
     (! cp -r "$script_dir"/default-client/* $auditor_client) && echo "Error copying the default client." && rollback
-    (! cp -r "$script_dir"/contract-template.config $auditor_data) && echo "Error copying the contract config template." && rollback
 fi
 
 # Install auditor systemd service.

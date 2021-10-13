@@ -5,7 +5,7 @@
         "build:installer": "./build.sh && ./build.sh installer"
     },
     "dependencies": {
-        "evernode-js-client": "0.1.0",
+        "evernode-js-client": "0.1.1",
         "sqlite3": "5.0.2",
         "uuid": "8.3.2",
         "hotpocket-nodejs-contract": "0.5.0",
