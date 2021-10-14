@@ -1,13 +1,9 @@
-const fs = require('fs');
-const path = require('path');
 const { v4: uuidv4 } = require('uuid');
 const HotPocket = require('hotpocket-js-client');
 
 class AuditorClient {
-    constructor(workingDir, keyFile, auditTimeout, tests) {
+    constructor(auditTimeout, tests) {
         this.auditTimeout = auditTimeout;
-        this.workingDir = workingDir;
-        this.keyFilePath = `${this.workingDir}/${keyFile}`;
         this.tests = tests;
 
         this.resolvers = {
@@ -15,9 +11,6 @@ class AuditorClient {
             ci: {}
         };
         this.promises = [];
-
-        if (!fs.existsSync(this.workingDir))
-            fs.mkdirSync(this.workingDir);
     }
 
     returnAuditResult = () => {
@@ -134,11 +127,7 @@ class AuditorClient {
         // Full audit process.
         try {
             // Generate or fetch existing keys.
-            const savedPrivateKey = fs.existsSync(this.keyFilePath) ? fs.readFileSync(this.keyFilePath, 'utf8') : null;
-            const keys = await HotPocket.generateKeys(savedPrivateKey);
-            if (!fs.existsSync(path.dirname(this.keyFilePath)))
-                fs.mkdirSync(path.dirname(this.keyFilePath));
-            fs.writeFileSync(this.keyFilePath, Buffer.from(keys.privateKey).toString("hex"));
+            const keys = await HotPocket.generateKeys();
 
             const pkhex = Buffer.from(keys.publicKey).toString('hex');
             console.log('My public key is: ' + pkhex);
@@ -211,7 +200,6 @@ exports.audit = async (ip, userPort) => {
             output: 'This is valid input 1234567891011121314151617181920'.repeat(500)
         }
     ];
-    const dataPath = path.join(__dirname, 'data');
-    const auditorClient = new AuditorClient(dataPath, "client.key", 5000, testcases);
+    const auditorClient = new AuditorClient(5000, testcases);
     return (await auditorClient.audit(ip, userPort));
 }

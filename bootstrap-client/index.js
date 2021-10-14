@@ -8,32 +8,19 @@ const child_process = require("child_process");
  * Responsible for communciating with the bootstrap contract.
  */
 class BootstrapClient {
-    constructor(instanceInfo, contractPath) {
+    constructor() {
         this.hpc = null;
-        this.instanceInfo = instanceInfo;
-        this.contractPath = contractPath;
     }
 
-    async connect() {
-        const workingDir = path.join(__dirname, 'datadir/');
+    async generateKeys() {
+        this.keys = await HotPocket.generateKeys();
+        return this.keys;
+    }
 
-        /**
-         * We persist the public key since we are hardcoding the public key in the messaging board.
-        */
-        if (!fs.existsSync(workingDir))
-            fs.mkdirSync(workingDir);
-
-        const keyfile = workingDir + "sashimono-client.key";
-        const savedPrivateKey = fs.existsSync(keyfile) ? fs.readFileSync(keyfile, 'utf8') : null;
-        console.log("Saved private key: " + savedPrivateKey);
-        const keys = await HotPocket.generateKeys(savedPrivateKey);
-        fs.writeFileSync(keyfile, Buffer.from(keys.privateKey).toString("hex"));
-
-
-        const pkhex = Buffer.from(keys.publicKey).toString('hex');
-        console.log('My public key is: ' + pkhex);
+    async connect(instanceInfo) {
+        this.instanceInfo = instanceInfo;
         let server = `wss://${this.instanceInfo.ip}:${this.instanceInfo.user_port}`
-        this.hpc = await HotPocket.createClient([server], keys, { protocol: HotPocket.protocols.bson });
+        this.hpc = await HotPocket.createClient([server], this.keys, { protocol: HotPocket.protocols.bson });
 
         // Establish HotPocket connection.
         if (!await this.hpc.connect()) {
@@ -87,12 +74,12 @@ class BootstrapClient {
         });
     }
 
-    async uploadContract() {
+    async uploadContract(contractPath) {
         return new Promise(async (resolve, reject) => {
             const zipPath = path.join(__dirname, 'bundle.zip');
             try {
                 // Generate zip bundle.
-                const configPath = path.join(this.contractPath, '/contract.config');
+                const configPath = path.join(contractPath, '/contract.config');
                 if (fs.existsSync(configPath)) {
                     const file = fs.readFileSync(configPath, 'utf8');
                     const json = JSON.parse(file);
@@ -100,7 +87,7 @@ class BootstrapClient {
                     fs.writeFileSync(configPath, JSON.stringify(json, null, 4));
                 }
                 child_process.execSync(`zip -r ${zipPath} *`, {
-                    cwd: this.contractPath
+                    cwd: contractPath
                 });
 
             } catch (error) {

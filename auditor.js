@@ -17,9 +17,6 @@ const DB_TABLE_NAME = 'audit_req';
 const MOMENT_BASE_INDEX = 0;
 const LEDGERS_PER_MOMENT = 72;
 
-// Instance requirement constants.
-const OWNER_PUBKEY = 'ed5cb83404120ac759609819591ef839b7d222c84f1f08b3012f490586159d2b50';
-
 const Events = {
     LEDGER: 'ledger'
 }
@@ -108,9 +105,13 @@ class Auditor {
 
             await this.updateAuditCashed(momentStartIdx, hostInfo.currency);
 
+            // Generating Hot pocket key pair for this audit round.
+            const bootstrapClient = new BootstrapClient();
+            const hpKeys = await bootstrapClient.generateKeys();
+
             this.logMessage(momentStartIdx, `Redeeming from the host, token - ${hostInfo.currency}`);
             const startLedger = this.rippleAPI.ledgerVersion;
-            const instanceInfo = await this.sendRedeemRequest(hostInfo);
+            const instanceInfo = await this.sendRedeemRequest(hostInfo, hpKeys);
             // Time took in ledgers for instance redeem.
             const ledgerTimeTook = this.rippleAPI.ledgerVersion - startLedger;
 
@@ -121,7 +122,7 @@ class Auditor {
             await this.updateAuditStatus(momentStartIdx, AuditStatus.REDEEMED);
 
             this.logMessage(momentStartIdx, `Auditing the host, token - ${hostInfo.currency}`);
-            const auditRes = await this.auditInstance(instanceInfo, ledgerTimeTook, momentStartIdx);
+            const auditRes = await this.auditInstance(instanceInfo, ledgerTimeTook, momentStartIdx, bootstrapClient);
 
             // Check whether moment is expired while waiting for the audit completion.
             if (!this.checkMomentValidity(momentStartIdx))
@@ -162,16 +163,15 @@ class Auditor {
         return (momentStartIdx == this.curMomentStartIdx);
     }
 
-    async auditInstance(instanceInfo, ledgerTimeTook, momentStartIdx) {
+    async auditInstance(instanceInfo, ledgerTimeTook, momentStartIdx, client) {
         // Redeem audit threshold is take as half the moment size.
         const redeemThreshold = LEDGERS_PER_MOMENT / 2;
         if (ledgerTimeTook >= redeemThreshold) {
             console.error(`Redeem took too long. (Took: ${ledgerTimeTook} Threshold: ${redeemThreshold}) Audit failed`);
             return false;
         }
-        const client = new BootstrapClient(instanceInfo, this.contractPath);
         // Checking connection with bootstrap contract succeeds.
-        const connectSuccess = await client.connect();
+        const connectSuccess = await client.connect(instanceInfo);
 
         if (!this.checkMomentValidity(momentStartIdx))
             throw 'Moment expired while waiting for the host connection.';
@@ -193,7 +193,7 @@ class Auditor {
         }
 
         // Checking the file upload to bootstrap contract succeeded.
-        const uploadSuccess = await client.uploadContract();
+        const uploadSuccess = await client.uploadContract(this.contractPath);
 
         if (!this.checkMomentValidity(momentStartIdx))
             throw 'Moment expired while uploading the contract bundle.';
@@ -220,8 +220,8 @@ class Auditor {
         return (await this.evernodeClient.auditSuccess());
     }
 
-    async sendRedeemRequest(hostInfo) {
-        return (await this.evernodeClient.redeem(hostInfo.currency, hostInfo.address, hostInfo.amount, this.getInstanceRequirements()));
+    async sendRedeemRequest(hostInfo, keys) {
+        return (await this.evernodeClient.redeem(hostInfo.currency, hostInfo.address, hostInfo.amount, this.getInstanceRequirements(keys)));
     }
 
     async expireDraftAudits() {
@@ -302,9 +302,9 @@ class Auditor {
         await this.db.updateValuesIn(this.auditTable, { status: status }, { moment_start_idx: momentStartIdxes });
     }
 
-    getInstanceRequirements() {
+    getInstanceRequirements(keys) {
         return {
-            owner_pubkey: OWNER_PUBKEY,
+            owner_pubkey: Buffer.from(keys.publicKey).toString('hex'),
             contract_id: uuidv4(),
             image: this.cfg.instance.image,
             config: {}
