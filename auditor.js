@@ -2,20 +2,21 @@ const fs = require('fs');
 const { v4: uuidv4 } = require('uuid');
 const { EvernodeClient } = require('evernode-js-client');
 const { SqliteDatabase, DataTypes } = require('./lib/sqlite-handler');
+const logger = require('./lib/logger');
 const { BootstrapClient } = require('./bootstrap-client');
 
 // Environment variables.
 const RIPPLED_URL = process.env.RIPPLED_URL || "wss://hooks-testnet.xrpl-labs.com";
 const DATA_DIR = process.env.DATA_DIR || __dirname;
 const IS_DEV_MODE = process.env.DEV === "1";
+const FILE_LOG_ENABLED = process.env.MB_FILE_LOG === "1";
 
 const CONFIG_PATH = DATA_DIR + '/auditor.cfg';
+const LOG_PATH = DATA_DIR + '/log/auditor.log';
 const DB_PATH = DATA_DIR + '/auditor.sqlite';
 const AUDITOR_CONTRACT_PATH = DATA_DIR + (IS_DEV_MODE ? '/dist/default-contract' : '/auditor-contract');
 const AUDITOR_CLIENT_PATH = DATA_DIR + (IS_DEV_MODE ? '/dist/default-client' : '/auditor-client');
 const DB_TABLE_NAME = 'audit_req';
-const MOMENT_BASE_INDEX = 0;
-const LEDGERS_PER_MOMENT = 72;
 
 const Events = {
     LEDGER: 'ledger'
@@ -63,6 +64,9 @@ class Auditor {
         try { await this.evernodeClient.connect(); }
         catch (e) { throw e; }
 
+        // Load the evernode configurations.
+        this.evernodeHookConf = this.evernodeClient.evernodeHookConf;
+
         this.db.open();
         // Create audit table if not exist.
         await this.createAuditTableIfNotExists();
@@ -73,7 +77,7 @@ class Auditor {
         this.rippleAPI.events.on(Events.LEDGER, async (e) => {
             this.lastValidatedLedgerIdx = e.ledgerVersion;
             // If this is the start of a new moment.
-            if ((this.lastValidatedLedgerIdx - MOMENT_BASE_INDEX) % LEDGERS_PER_MOMENT === 0) {
+            if ((this.lastValidatedLedgerIdx - this.evernodeHookConf.momentBaseIdx) % this.evernodeHookConf.momentSize === 0) {
                 this.curMomentStartIdx = this.lastValidatedLedgerIdx;
                 // Start the audit cycle for the moment.
                 // Keep constant variable of momentStartIdx for this execution since curMomentStartIdx is changing.
@@ -165,7 +169,7 @@ class Auditor {
 
     async auditInstance(instanceInfo, ledgerTimeTook, momentStartIdx, client) {
         // Redeem audit threshold is take as half the moment size.
-        const redeemThreshold = LEDGERS_PER_MOMENT / 2;
+        const redeemThreshold = this.evernodeHookConf.momentSize / 2;
         if (ledgerTimeTook >= redeemThreshold) {
             console.error(`Redeem took too long. (Took: ${ledgerTimeTook} Threshold: ${redeemThreshold}) Audit failed`);
             return false;
@@ -234,8 +238,8 @@ class Auditor {
 
     async initMomentInfo() {
         this.lastValidatedLedgerIdx = this.rippleAPI.ledgerVersion;
-        const relativeN = (this.lastValidatedLedgerIdx - MOMENT_BASE_INDEX) / LEDGERS_PER_MOMENT;
-        this.curMomentStartIdx = MOMENT_BASE_INDEX + (relativeN * LEDGERS_PER_MOMENT);
+        const relativeN = (this.lastValidatedLedgerIdx - this.evernodeHookConf.momentBaseIdx) / this.evernodeHookConf.momentSize;
+        this.curMomentStartIdx = this.evernodeHookConf.momentBaseIdx + (relativeN * this.evernodeHookConf.momentSize);
         if (!this.draftAudits)
             this.draftAudits = [];
 
@@ -325,6 +329,10 @@ class Auditor {
 }
 
 async function main() {
+
+    // Logs are formatted with the timestamp and a log file will be created inside log directory.
+    logger.init(LOG_PATH, FILE_LOG_ENABLED);
+
     console.log('Starting the Evernode auditor.' + (IS_DEV_MODE ? ' (in dev mode)' : ''));
     console.log('Data dir: ' + DATA_DIR);
     console.log('Rippled server: ' + RIPPLED_URL);
