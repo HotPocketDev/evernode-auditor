@@ -225,7 +225,8 @@ class Auditor {
     }
 
     async sendRedeemRequest(hostInfo, keys) {
-        return (await this.evernodeClient.redeem(hostInfo.currency, hostInfo.address, hostInfo.amount, this.getInstanceRequirements(keys)));
+        const response = await this.evernodeClient.redeem(hostInfo.currency, hostInfo.address, hostInfo.amount, this.getInstanceRequirements(keys));
+        return response.instance;
     }
 
     async expireDraftAudits() {
