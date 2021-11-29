@@ -1,6 +1,6 @@
 const fs = require('fs');
 const { v4: uuidv4 } = require('uuid');
-const { EvernodeClient } = require('evernode-js-client');
+const evernode = require('evernode-js-client');
 const { SqliteDatabase, DataTypes } = require('./lib/sqlite-handler');
 const logger = require('./lib/logger');
 const { BootstrapClient } = require('./bootstrap-client');
@@ -17,10 +17,6 @@ const DB_PATH = DATA_DIR + '/auditor.sqlite';
 const AUDITOR_CONTRACT_PATH = DATA_DIR + (IS_DEV_MODE ? '/dist/default-contract' : '/auditor-contract');
 const AUDITOR_CLIENT_PATH = DATA_DIR + (IS_DEV_MODE ? '/dist/default-client' : '/auditor-client');
 const DB_TABLE_NAME = 'audit_req';
-
-const Events = {
-    LEDGER: 'ledger'
-}
 
 const AuditStatus = {
     CREATED: 'Created',
@@ -53,19 +49,24 @@ class Auditor {
         this.db = new SqliteDatabase(dbPath);
     }
 
-    async init(rippleServer) {
+    async init(rippledServer) {
         this.readConfig();
         if (!this.cfg.xrpl.address || !this.cfg.xrpl.secret || !this.cfg.xrpl.hookAddress || !this.cfg.instance.image)
             throw "Required cfg fields cannot be empty.";
 
-        this.evernodeClient = new EvernodeClient(this.cfg.xrpl.address, this.cfg.xrpl.secret, { hookAddress: this.cfg.xrpl.hookAddress, rippledServer: rippleServer });
-        this.rippleAPI = this.evernodeClient.rippleAPI;
+        evernode.Defaults.set({
+            hookAddress: this.cfg.xrpl.hookAddress,
+            rippledServer: rippledServer
+        })
 
-        try { await this.evernodeClient.connect(); }
+        this.auditorClient = new evernode.AuditorClient(this.cfg.xrpl.address, this.cfg.xrpl.secret);
+        this.xrplApi = this.auditorClient.xrplApi;
+
+        try { await this.auditorClient.connect(); }
         catch (e) { throw e; }
 
-        // Load the evernode configurations.
-        this.evernodeHookConf = this.evernodeClient.evernodeHookConf;
+        this.userClient = new evernode.UserClient(this.cfg.xrpl.address, this.cfg.xrpl.secret, { xrplApi: this.xrplApi });
+        this.evernodeHookConf = this.auditorClient.hookConfig;
 
         this.db.open();
         // Create audit table if not exist.
@@ -73,9 +74,9 @@ class Auditor {
         await this.initMomentInfo();
         this.db.close();
 
-        // Keep listening to ripple ledger creations and keep track of moments.
-        this.rippleAPI.events.on(Events.LEDGER, async (e) => {
-            this.lastValidatedLedgerIdx = e.ledgerVersion;
+        // Keep listening to xrpl ledger creations and keep track of moments.
+        this.xrplApi.on(evernode.XrplApiEvents.LEDGER, async (e) => {
+            this.lastValidatedLedgerIdx = e.ledger_index;
             // If this is the start of a new moment.
             if ((this.lastValidatedLedgerIdx - this.evernodeHookConf.momentBaseIdx) % this.evernodeHookConf.momentSize === 0) {
                 this.curMomentStartIdx = this.lastValidatedLedgerIdx;
@@ -114,10 +115,10 @@ class Auditor {
             const hpKeys = await bootstrapClient.generateKeys();
 
             this.logMessage(momentStartIdx, `Redeeming from the host, token - ${hostInfo.currency}`);
-            const startLedger = this.rippleAPI.ledgerVersion;
+            const startLedger = this.xrplApi.ledgerIndex;
             const instanceInfo = await this.sendRedeemRequest(hostInfo, hpKeys);
             // Time took in ledgers for instance redeem.
-            const ledgerTimeTook = this.rippleAPI.ledgerVersion - startLedger;
+            const ledgerTimeTook = this.xrplApi.ledgerIndex - startLedger;
 
             // Check whether moment is expired while waiting for the redeem.
             if (!this.checkMomentValidity(momentStartIdx))
@@ -217,15 +218,15 @@ class Auditor {
     }
 
     async sendAuditRequest() {
-        return (await this.evernodeClient.requestAudit());
+        return (await this.auditorClient.requestAudit());
     }
 
     async sendAuditSuccess() {
-        return (await this.evernodeClient.auditSuccess());
+        return (await this.auditorClient.auditSuccess());
     }
 
     async sendRedeemRequest(hostInfo, keys) {
-        const response = await this.evernodeClient.redeem(hostInfo.currency, hostInfo.address, hostInfo.amount, this.getInstanceRequirements(keys));
+        const response = await this.userClient.redeem(hostInfo.currency, hostInfo.address, hostInfo.amount, this.getInstanceRequirements(keys));
         return response.instance;
     }
 
@@ -238,7 +239,7 @@ class Auditor {
     }
 
     async initMomentInfo() {
-        this.lastValidatedLedgerIdx = this.rippleAPI.ledgerVersion;
+        this.lastValidatedLedgerIdx = this.xrplApi.ledgerIndex;
         const relativeN = (this.lastValidatedLedgerIdx - this.evernodeHookConf.momentBaseIdx) / this.evernodeHookConf.momentSize;
         this.curMomentStartIdx = this.evernodeHookConf.momentBaseIdx + (relativeN * this.evernodeHookConf.momentSize);
         if (!this.draftAudits)
