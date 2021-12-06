@@ -1,4 +1,6 @@
 const fs = require('fs');
+const process = require('process');
+const { Buffer } = require('buffer');
 const { v4: uuidv4 } = require('uuid');
 const evernode = require('evernode-js-client');
 const { SqliteDatabase, DataTypes } = require('./lib/sqlite-handler');
@@ -62,8 +64,7 @@ class Auditor {
         this.auditorClient = new evernode.AuditorClient(this.cfg.xrpl.address, this.cfg.xrpl.secret);
         this.xrplApi = this.auditorClient.xrplApi;
 
-        try { await this.auditorClient.connect(); }
-        catch (e) { throw e; }
+        await this.auditorClient.connect();
 
         this.userClient = new evernode.UserClient(this.cfg.xrpl.address, this.cfg.xrpl.secret, { xrplApi: this.xrplApi });
         this.evernodeHookConf = this.auditorClient.hookConfig;
