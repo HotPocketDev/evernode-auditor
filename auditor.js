@@ -90,20 +90,12 @@ class Auditor {
                 }
             }
         });
-    }
 
-    async auditCycle(momentStartIdx) {
-        this.db.open();
-
-        // Before this moment cycle, we expire the old draft audits.
-        this.expireDraftAudits();
-
-        this.logMessage(momentStartIdx, 'Requesting for an audit.');
-        await this.createAuditRecord(momentStartIdx);
-        this.setAsDraft(momentStartIdx);
-
-        try {
-            const hostInfo = await this.sendAuditRequest();
+        auditorClient.onAuditAssignment(async (hostInfo, err) => {
+            if (err) {
+                console.log("Audit assignment error: ", err.reason);
+                return;
+            }
 
             // Check whether moment is expired while waiting for the response.
             if (!this.checkMomentValidity(momentStartIdx))
@@ -137,12 +129,28 @@ class Auditor {
             if (auditRes) {
                 this.logMessage(momentStartIdx, `Audit success, token - ${hostInfo.currency}`);
                 await this.updateAuditStatus(momentStartIdx, AuditStatus.AUDITSUCCESS);
-                await this.sendAuditSuccess();
+                await this.sendAuditSuccess(hostInfo.address);
             }
             else {
                 this.logMessage(momentStartIdx, `Audit failed, token - ${hostInfo.currency}`);
                 await this.updateAuditStatus(momentStartIdx, AuditStatus.AUDITFAILED);
+                await this.sendAuditFail(hostInfo.address);
             }
+        });
+    }
+
+    async auditCycle(momentStartIdx) {
+        this.db.open();
+
+        // Before this moment cycle, we expire the old draft audits.
+        this.expireDraftAudits();
+
+        this.logMessage(momentStartIdx, 'Requesting for an audit.');
+        await this.createAuditRecord(momentStartIdx);
+        this.setAsDraft(momentStartIdx);
+
+        try {
+            await this.sendAuditRequest();
         }
         catch (e) {
             this.logMessage(momentStartIdx, 'Audit error - ', e);
@@ -222,8 +230,12 @@ class Auditor {
         return (await this.auditorClient.requestAudit());
     }
 
-    async sendAuditSuccess() {
-        return (await this.auditorClient.auditSuccess());
+    async sendAuditSuccess(hostsAddress) {
+        return (await this.auditorClient.auditSuccess(hostsAddress));
+    }
+
+    async sendAuditFail(hostsAddress) {
+        return (await this.auditorClient.auditFail(hostsAddress));
     }
 
     async sendRedeemRequest(hostInfo, keys) {
