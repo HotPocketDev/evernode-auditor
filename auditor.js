@@ -59,9 +59,9 @@ class Auditor {
         this.evernodeHookConf = this.auditorClient.hookConfig;
 
         this.userClient = new evernode.UserClient(this.cfg.xrpl.address, this.cfg.xrpl.secret, { xrplApi: this.xrplApi });
-        await this.userClient.prepareAccount();
 
         await this.userClient.connect();
+        await this.userClient.prepareAccount();
 
         // Create audit table if not exist.
         await this.initMomentInfo();
@@ -122,7 +122,7 @@ class Auditor {
 
                     // Check whether moment is expired while waiting for cashing the audit.
                     if (!this.#checkMomentValidity(momentStartIdx))
-                        throw 'Moment expired while waiting for cashing the audit.';
+                        throw 'Moment expired while waiting for cashing the audit check.';
 
                     // Generating Hot pocket key pair for this audit round.
                     const bootstrapClient = new BootstrapClient();
@@ -245,7 +245,7 @@ class Auditor {
     }
 
     async sendRedeemRequest(hostInfo, keys) {
-        const response = await this.userClient.redeem(hostInfo.currency, hostInfo.address, hostInfo.amount, this.getInstanceRequirements(keys), { timeout: 600000 });
+        const response = await this.userClient.redeem(hostInfo.currency, hostInfo.address, hostInfo.amount, this.getInstanceRequirements(keys));
         return response.instance;
     }
 
