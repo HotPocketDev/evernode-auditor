@@ -3,7 +3,6 @@ const process = require('process');
 const { Buffer } = require('buffer');
 const { v4: uuidv4 } = require('uuid');
 const evernode = require('evernode-js-client');
-const { SqliteDatabase, DataTypes } = require('./lib/sqlite-handler');
 const logger = require('./lib/logger');
 const { BootstrapClient } = require('./bootstrap-client');
 
@@ -15,33 +14,18 @@ const FILE_LOG_ENABLED = process.env.MB_FILE_LOG === "1";
 
 const CONFIG_PATH = DATA_DIR + '/auditor.cfg';
 const LOG_PATH = DATA_DIR + '/log/auditor.log';
-const DB_PATH = DATA_DIR + '/auditor.sqlite';
 const AUDITOR_CONTRACT_PATH = DATA_DIR + (IS_DEV_MODE ? '/dist/default-contract' : '/auditor-contract');
 const AUDITOR_CLIENT_PATH = DATA_DIR + (IS_DEV_MODE ? '/dist/default-client' : '/auditor-client');
-const DB_TABLE_NAME = 'audit_req';
-
-const AuditStatus = {
-    CREATED: 'Created',
-    ASSIGNED: 'Assigned',
-    CASHED: 'Cashed',
-    REDEEMED: 'Redeemed',
-    AUDITSUCCESS: 'AuditSuccess',
-    AUDITFAILED: 'AuditFailed',
-    EXPIRED: 'Expired',
-    FAILED: 'Failed'
-}
 
 class Auditor {
-    #db = null;
     #configPath = null;
     #contractPath = null;
-    #auditTable = DB_TABLE_NAME;
     #lastValidatedLedgerIdx = null;
     #curMomentStartIdx = null;
 
     #ongoingAudit = null;
 
-    constructor(configPath, dbPath, contractPath, clientPath) {
+    constructor(configPath, contractPath, clientPath) {
         this.#configPath = configPath;
         this.#contractPath = contractPath;
 
@@ -56,8 +40,6 @@ class Auditor {
 
         const { audit } = require(clientPath);
         this.audit = audit;
-
-        this.#db = new SqliteDatabase(dbPath);
     }
 
     async init(rippledServer) {
@@ -74,15 +56,15 @@ class Auditor {
         this.xrplApi = this.auditorClient.xrplApi;
 
         await this.auditorClient.connect();
-
-        this.userClient = new evernode.UserClient(this.cfg.xrpl.address, this.cfg.xrpl.secret, { xrplApi: this.xrplApi });
         this.evernodeHookConf = this.auditorClient.hookConfig;
 
-        this.#db.open();
+        this.userClient = new evernode.UserClient(this.cfg.xrpl.address, this.cfg.xrpl.secret, { xrplApi: this.xrplApi });
+        await this.userClient.prepareAccount();
+
+        await this.userClient.connect();
+
         // Create audit table if not exist.
-        await this.createAuditTableIfNotExists();
         await this.initMomentInfo();
-        this.#db.close();
 
         // Keep listening to xrpl ledger creations and keep track of moments.
         this.xrplApi.on(evernode.XrplApiEvents.LEDGER, async (e) => {
@@ -107,13 +89,11 @@ class Auditor {
                 momentStartIdx: momentStartIdx,
                 resolve: resolve,
                 reject: reject,
-                drafts: {},
-                isDraft: true
+                assignmentCount: -1
             };
 
             try {
                 this.logMessage(momentStartIdx, 'Requesting for an audit.');
-                await this.createAuditRecord(momentStartIdx);
                 await this.auditorClient.requestAudit();
             }
             catch (e) {
@@ -121,115 +101,94 @@ class Auditor {
                 reject(e);
             }
 
-            // Off events of previous moment, before listen to new moment.
-            this.auditorClient.off(evernode.AuditorEvents.AuditAssignment);
             this.auditorClient.on(evernode.AuditorEvents.AuditAssignment, async (assignmentInfo) => {
+                if (this.#ongoingAudit.assignmentCount == -1)
+                    this.#ongoingAudit.assignmentCount = 1;
+                else
+                    this.#ongoingAudit.assignmentCount++;
+
                 let hostInfo = {
                     currency: assignmentInfo.currency,
                     address: assignmentInfo.issuer,
                     amount: assignmentInfo.value
                 }
 
-                await new Promise(async (resolveEvent, rejectEvent) => {
-                    try {
-                        this.logMessage(momentStartIdx, `Assigned a host for audit, token - ${hostInfo.currency}`);
-                        await this.updateAuditAssigned(momentStartIdx, hostInfo.currency);
+                try {
+                    this.logMessage(momentStartIdx, `Assigned a host for audit, token - ${hostInfo.currency}`);
 
-                        this.#ongoingAudit.isDraft = false;
-                        this.#ongoingAudit.drafts[`${momentStartIdx}${hostInfo.currency}`] = {
-                            resolve: resolveEvent,
-                            reject: rejectEvent
-                        };
 
-                        this.logMessage(momentStartIdx, `Cashing the hosting token, token - ${hostInfo.currency}`);
-                        await this.auditorClient.cashAuditAssignment(assignmentInfo);
+                    this.logMessage(momentStartIdx, `Cashing the hosting token, token - ${hostInfo.currency}`);
+                    await this.auditorClient.cashAuditAssignment(assignmentInfo);
 
-                        // Check whether moment is expired while waiting for cashing the audit.
-                        if (!this.#checkMomentValidity(momentStartIdx))
-                            throw { status: AuditStatus.EXPIRED, error: 'Moment expired while waiting for cashing the audit.' };
+                    // Check whether moment is expired while waiting for cashing the audit.
+                    if (!this.#checkMomentValidity(momentStartIdx))
+                        throw 'Moment expired while waiting for cashing the audit.';
 
-                        this.logMessage(momentStartIdx, `Cashed the hosting token, token - ${hostInfo.currency}`);
-                        await this.updateAuditStatus(momentStartIdx, hostInfo.currency, AuditStatus.CASHED);
+                    // Generating Hot pocket key pair for this audit round.
+                    const bootstrapClient = new BootstrapClient();
+                    const hpKeys = await bootstrapClient.generateKeys();
 
-                        // Generating Hot pocket key pair for this audit round.
-                        const bootstrapClient = new BootstrapClient();
-                        const hpKeys = await bootstrapClient.generateKeys();
+                    this.logMessage(momentStartIdx, `Redeeming from the host, token - ${hostInfo.currency}`);
+                    const startLedger = this.xrplApi.ledgerIndex;
+                    const instanceInfo = await this.sendRedeemRequest(hostInfo, hpKeys);
+                    // Time took in ledgers for instance redeem.
+                    const ledgerTimeTook = this.xrplApi.ledgerIndex - startLedger;
 
-                        this.logMessage(momentStartIdx, `Redeeming from the host, token - ${hostInfo.currency}`);
-                        const startLedger = this.xrplApi.ledgerIndex;
-                        const instanceInfo = await this.sendRedeemRequest(hostInfo, hpKeys);
-                        // Time took in ledgers for instance redeem.
-                        const ledgerTimeTook = this.xrplApi.ledgerIndex - startLedger;
+                    // Check whether moment is expired while waiting for the redeem.
+                    if (!this.#checkMomentValidity(momentStartIdx))
+                        throw 'Moment expired while waiting for the redeem response.';
 
-                        // Check whether moment is expired while waiting for the redeem.
-                        if (!this.#checkMomentValidity(momentStartIdx))
-                            throw { status: AuditStatus.EXPIRED, error: 'Moment expired while waiting for the redeem response, token - ${hostInfo.currency}' };
+                    this.logMessage(momentStartIdx, `Auditing the host, token - ${hostInfo.currency}`);
+                    const auditRes = await this.auditInstance(instanceInfo, ledgerTimeTook, momentStartIdx, bootstrapClient);
 
-                        await this.updateAuditStatus(momentStartIdx, hostInfo.currency, AuditStatus.REDEEMED);
+                    // Check whether moment is expired while waiting for the audit completion.
+                    if (!this.#checkMomentValidity(momentStartIdx))
+                        throw 'Moment expired while waiting for the audit.';
 
-                        this.logMessage(momentStartIdx, `Auditing the host, token - ${hostInfo.currency}`);
-                        const auditRes = await this.auditInstance(instanceInfo, ledgerTimeTook, momentStartIdx, bootstrapClient);
-
-                        // Check whether moment is expired while waiting for the audit completion.
-                        if (!this.#checkMomentValidity(momentStartIdx))
-                            throw { status: AuditStatus.EXPIRED, error: 'Moment expired while waiting for the audit, token - ${hostInfo.currency}' };
-
-                        if (auditRes) {
-                            this.logMessage(momentStartIdx, `Audit success, token - ${hostInfo.currency}`);
-                            await this.updateAuditStatus(momentStartIdx, hostInfo.currency, AuditStatus.AUDITSUCCESS);
-                            await this.auditorClient.auditSuccess(hostInfo.address)
-                        }
-                        else {
-                            this.logMessage(momentStartIdx, `Audit failed, token - ${hostInfo.currency}`);
-                            await this.updateAuditStatus(momentStartIdx, hostInfo.currency, AuditStatus.AUDITFAILED);
-                            await this.auditorClient.auditFail(hostInfo.address);
-                        }
-
-                        delete this.#ongoingAudit.drafts[`${momentStartIdx}${hostInfo.currency}`];
-                        resolveEvent();
+                    if (auditRes) {
+                        this.logMessage(momentStartIdx, `Audit success, token - ${hostInfo.currency}`);
+                        await this.auditorClient.auditSuccess(hostInfo.address)
                     }
-                    catch (e) {
-                        rejectEvent(e);
+                    else {
+                        this.logMessage(momentStartIdx, `Audit failed, token - ${hostInfo.currency}`);
+                        await this.auditorClient.auditFail(hostInfo.address);
                     }
-                }).catch(async e => {
-                    this.logMessage(momentStartIdx, 'Audit error - ', e);
-                    delete this.#ongoingAudit.drafts[`${momentStartIdx}${hostInfo.currency}`];
-                    if (e.status && e.status === AuditStatus.EXPIRED)
-                        await this.updateAuditStatus(momentStartIdx, hostInfo.currency, AuditStatus.EXPIRED);
-                    else
-                        await this.updateAuditStatus(momentStartIdx, hostInfo.currency, AuditStatus.FAILED);
-                });
+                }
+                catch (e) {
+                    this.logMessage(momentStartIdx, 'Audit error,', e.reason ? `${e.reason},` : e, `token - ${hostInfo.currency}`);
+                }
+
+                this.#ongoingAudit.assignmentCount--;
             });
         });
     }
 
     async auditCycle(momentStartIdx) {
-        this.#db.open();
-
-        // Before this moment cycle, we expire the old draft audits.
+        // Before this moment cycle, we expire the previous audit.
         if (this.#ongoingAudit && this.#ongoingAudit.momentStartIdx < momentStartIdx) {
-            for (const key of Object.keys(this.#ongoingAudit.drafts))
-                this.#ongoingAudit.drafts[key].reject({ status: AuditStatus.EXPIRED, error: 'Audit has been expired.' });
+            // Off events of previous moment's listener before the new audit cycle.
+            this.auditorClient.off(evernode.AuditorEvents.AuditAssignment);
 
-            if (this.#ongoingAudit.isDraft)
-                this.#ongoingAudit.reject({ status: AuditStatus.EXPIRED, error: 'Audit has been expired.' });
+            // assignmentCount > 0 means, There's a pending audit for an audit assignment.
+            // assignmentCount == -1 means, There's no audit assignment for the audit request.
+            // In boath cases audit has to be expired.
+            if (this.#ongoingAudit.assignmentCount !== 0)
+                this.#ongoingAudit.reject('Audit has been expired.');
             else
                 this.#ongoingAudit.resolve();
             this.#ongoingAudit = null;
         }
 
+        this.logMessage(momentStartIdx, 'Audit cycle started.');
+
         try {
             await this.#handleAudit(momentStartIdx);
         }
         catch (e) {
-            this.logMessage(momentStartIdx, 'Audit error - ', e);
-            if (e.status && e.status === AuditStatus.EXPIRED)
-                await this.updateAuditStatus(momentStartIdx, null, AuditStatus.EXPIRED);
-            else
-                await this.updateAuditStatus(momentStartIdx, null, AuditStatus.FAILED);
+            this.logMessage(momentStartIdx, 'Audit error - ', e.reason ? `${e.reason},` : e);
         }
 
-        this.#db.close();
+        this.logMessage(momentStartIdx, 'Audit cycle ended.');
     }
 
     #checkMomentValidity(momentStartIdx) {
@@ -240,17 +199,17 @@ class Auditor {
         // Redeem audit threshold is take as half the moment size.
         const redeemThreshold = this.evernodeHookConf.momentSize / 2;
         if (ledgerTimeTook >= redeemThreshold) {
-            console.error(`Redeem took too long. (Took: ${ledgerTimeTook} Threshold: ${redeemThreshold}) Audit failed`);
+            this.logMessage(momentStartIdx, `Redeem took too long. (Took: ${ledgerTimeTook} Threshold: ${redeemThreshold}) Audit failed`);
             return false;
         }
         // Checking connection with bootstrap contract succeeds.
         const connectSuccess = await client.connect(instanceInfo);
 
         if (!this.#checkMomentValidity(momentStartIdx))
-            throw { status: AuditStatus.EXPIRED, error: 'Moment expired while waiting for the host connection.' };
+            throw 'Moment expired while waiting for the host connection.';
 
         if (!connectSuccess) {
-            console.error('Bootstrap contract connection failed.');
+            this.logMessage(momentStartIdx, 'Bootstrap contract connection failed.');
             return false;
         }
 
@@ -258,7 +217,7 @@ class Auditor {
         const isBootstrapRunning = await client.checkStatus();
 
         if (!this.#checkMomentValidity(momentStartIdx))
-            throw { status: AuditStatus.EXPIRED, error: 'Moment expired while waiting for the bootstrap contract status.' };
+            throw 'Moment expired while waiting for the bootstrap contract status.';
 
         if (!isBootstrapRunning) {
             console.error('Bootstrap contract status is not live.');
@@ -269,24 +228,24 @@ class Auditor {
         const uploadSuccess = await client.uploadContract(this.#contractPath);
 
         if (!this.#checkMomentValidity(momentStartIdx))
-            throw { status: AuditStatus.EXPIRED, error: 'Moment expired while uploading the contract bundle.' };
+            throw 'Moment expired while uploading the contract bundle.';
 
         if (!uploadSuccess) {
-            console.error('Contract upload failed.');
+            this.logMessage(momentStartIdx, 'Contract upload failed.');
             return false;
         }
 
         // Run custom auditor contract related logic.
         const auditLogicSuccess = await this.audit(instanceInfo.ip, instanceInfo.user_port);
         if (!auditLogicSuccess) {
-            console.error('Custom audit process informed fail status.');
+            this.logMessage(momentStartIdx, 'Custom audit process informed fail status.');
             return false;
         }
         return true;
     }
 
     async sendRedeemRequest(hostInfo, keys) {
-        const response = await this.userClient.redeem(hostInfo.currency, hostInfo.address, hostInfo.amount, this.getInstanceRequirements(keys), { timeout: 30000 });
+        const response = await this.userClient.redeem(hostInfo.currency, hostInfo.address, hostInfo.amount, this.getInstanceRequirements(keys), { timeout: 600000 });
         return response.instance;
     }
 
@@ -294,75 +253,6 @@ class Auditor {
         this.#lastValidatedLedgerIdx = this.xrplApi.ledgerIndex;
         const relativeN = Math.floor((this.#lastValidatedLedgerIdx - this.evernodeHookConf.momentBaseIdx) / this.evernodeHookConf.momentSize);
         this.#curMomentStartIdx = this.evernodeHookConf.momentBaseIdx + (relativeN * this.evernodeHookConf.momentSize);
-        if (!this.draftAudits)
-            this.draftAudits = [];
-
-        const draftAudits = await this.getDraftAuditRecords();
-        if (draftAudits && draftAudits.length) {
-            // If there's any pending audits handle them. This will be implemented later.
-            // If there's expired audits, Update their db status.
-            const expiredDrafts = draftAudits.filter(a => a.moment_start_idx <= this.#curMomentStartIdx);
-            if (expiredDrafts && expiredDrafts.length) {
-                this.logMessage(expiredDrafts.map(a => a.moment_start_idx).join(', '), 'Audit has been expired.');
-                await this.updateAuditStatusByIds(AuditStatus.EXPIRED, expiredDrafts.map(a => a.id));
-            }
-        }
-    }
-
-    async createAuditTableIfNotExists() {
-        // Create table if not exists.
-        await this.#db.createTableIfNotExists(this.#auditTable, [
-            { name: 'id', type: DataTypes.INTEGER, primary: true, notNull: true },
-            { name: 'timestamp', type: DataTypes.INTEGER, notNull: true },
-            { name: 'moment_start_idx', type: DataTypes.INTEGER, notNull: true },
-            { name: 'hosting_token', type: DataTypes.TEXT, notNull: false },
-            { name: 'status', type: DataTypes.TEXT, notNull: true }
-        ]);
-    }
-
-    async getDraftAuditRecords() {
-        return (await this.#db.getValuesIn(this.#auditTable, { status: [AuditStatus.CREATED, AuditStatus.ASSIGNED, AuditStatus.CASHED, AuditStatus.REDEEMED] }));
-    }
-
-    async getAuditRecords(momentStartIdx) {
-        return (await this.#db.getValues(this.#auditTable, { moment_start_idx: momentStartIdx }));
-    }
-
-    async createAuditRecord(momentStartIdx) {
-        await this.#db.insertValue(this.#auditTable, {
-            timestamp: Date.now(),
-            moment_start_idx: momentStartIdx,
-            status: AuditStatus.CREATED
-        });
-    }
-
-    async updateAuditAssigned(momentStartIdx, hostingToken) {
-        const auditRecords = await this.getAuditRecords(momentStartIdx);
-        const createdRecord = auditRecords.find(a => a.status === AuditStatus.CREATED);
-        if (createdRecord) {
-            await this.#db.updateValue(this.#auditTable, {
-                hosting_token: hostingToken,
-                status: AuditStatus.ASSIGNED
-            }, { moment_start_idx: createdRecord.moment_start_idx, hosting_token: createdRecord.hosting_token, status: createdRecord.status });
-        }
-        else {
-            await this.#db.insertValue(this.#auditTable, {
-                timestamp: auditRecords[0].timestamp,
-                moment_start_idx: auditRecords[0].moment_start_idx,
-                hosting_token: hostingToken,
-                status: AuditStatus.ASSIGNED
-            });
-        }
-    }
-
-    async updateAuditStatus(momentStartIdx, hostingToken, status) {
-        await this.#db.updateValue(this.#auditTable, {
-            status: status
-        }, { moment_start_idx: momentStartIdx, hosting_token: hostingToken });
-    }
-
-    async updateAuditStatusByIds(status, ids) {
-        await this.#db.updateValuesIn(this.#auditTable, { status: status }, { id: ids });
     }
 
     getInstanceRequirements(keys) {
@@ -396,7 +286,7 @@ async function main() {
     console.log('Data dir: ' + DATA_DIR);
     console.log('Rippled server: ' + RIPPLED_URL);
 
-    const auditor = new Auditor(CONFIG_PATH, DB_PATH, AUDITOR_CONTRACT_PATH, AUDITOR_CLIENT_PATH);
+    const auditor = new Auditor(CONFIG_PATH, AUDITOR_CONTRACT_PATH, AUDITOR_CLIENT_PATH);
     await auditor.init(RIPPLED_URL);
 }
 
