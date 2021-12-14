@@ -104,6 +104,7 @@ class Auditor {
             }
 
             this.auditorClient.on(evernode.AuditorEvents.AuditAssignment, async (assignmentInfo) => {
+                // Keep updating ongoing audits when audit assignment received.
                 if (this.#ongoingAudit.assignmentCount == -1)
                     this.#ongoingAudit.assignmentCount = 1;
                 else
@@ -116,15 +117,15 @@ class Auditor {
                 }
 
                 try {
-                    this.logMessage(momentStartIdx, `Assigned a host for audit, token - ${hostInfo.currency}`);
+                    this.logMessage(momentStartIdx, `Assigned a host to audit, token - ${hostInfo.currency}`);
 
 
                     this.logMessage(momentStartIdx, `Cashing the hosting token, token - ${hostInfo.currency}`);
                     await this.auditorClient.cashAuditAssignment(assignmentInfo);
 
-                    // Check whether moment is expired while waiting for cashing the audit.
+                    // Check whether moment is expired while cashing the hosting token.
                     if (!this.#checkMomentValidity(momentStartIdx))
-                        throw 'Moment expired while waiting for cashing the audit check.';
+                        throw 'Moment expired while cashing the hosting token.';
 
                     // Generating Hot pocket key pair for this audit round.
                     const bootstrapClient = new BootstrapClient();
@@ -160,19 +161,21 @@ class Auditor {
                     this.logMessage(momentStartIdx, 'Audit error,', e.reason ? `${e.reason},` : e, `token - ${hostInfo.currency}`);
                 }
 
+                // Decrease ongoing audit assignment count when an audit completed.
                 this.#ongoingAudit.assignmentCount--;
             });
         });
     }
 
     async auditCycle(momentStartIdx) {
-        // Before this moment cycle, we expire the previous audit.
+        // Before this moment cycle, we expire the previous audit if any.
         if (this.#ongoingAudit && this.#ongoingAudit.momentStartIdx < momentStartIdx) {
             // Off events of previous moment's listener before the new audit cycle.
             this.auditorClient.off(evernode.AuditorEvents.AuditAssignment);
 
             // assignmentCount > 0 means, There's a pending audit for an audit assignment.
             // assignmentCount == -1 means, There's no audit assignment for the audit request.
+            // assignmentCount == 0 means, All assigned audits has been completed.
             // In boath cases audit has to be expired.
             if (this.#ongoingAudit.assignmentCount !== 0)
                 this.#ongoingAudit.reject('Audit has been expired.');
