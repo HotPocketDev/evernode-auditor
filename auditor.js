@@ -17,6 +17,8 @@ const LOG_PATH = DATA_DIR + '/log/auditor.log';
 const AUDITOR_CONTRACT_PATH = DATA_DIR + (IS_DEV_MODE ? '/dist/default-contract' : '/auditor-contract');
 const AUDITOR_CLIENT_PATH = DATA_DIR + (IS_DEV_MODE ? '/dist/default-client' : '/auditor-client');
 
+const REDEEM_WAIT_TIMEOUT = 60000 // 1 Minute.
+
 class Auditor {
     #configPath = null;
     #contractPath = null;
@@ -245,7 +247,7 @@ class Auditor {
     }
 
     async sendRedeemRequest(hostInfo, keys) {
-        const response = await this.userClient.redeem(hostInfo.currency, hostInfo.address, hostInfo.amount, this.getInstanceRequirements(keys));
+        const response = await this.userClient.redeem(hostInfo.currency, hostInfo.address, hostInfo.amount, this.getInstanceRequirements(keys), { timeout: REDEEM_WAIT_TIMEOUT });
         return response.instance;
     }
 
