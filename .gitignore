@@ -1,5 +1,4 @@
 node_modules
 dist
 auditor.cfg
-auditor.sqlite
 bundle.zip

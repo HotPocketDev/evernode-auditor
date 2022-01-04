@@ -101,6 +101,7 @@ class Auditor {
             catch (e) {
                 this.#ongoingAudit = null;
                 reject(e);
+                return;
             }
 
             this.auditorClient.on(evernode.AuditorEvents.AuditAssignment, async (assignmentInfo) => {
@@ -121,7 +122,7 @@ class Auditor {
 
 
                     this.logMessage(momentStartIdx, `Cashing the hosting token, token - ${hostInfo.currency}`);
-                    await this.auditorClient.cashAuditAssignment(assignmentInfo);
+                    const cashRes = await this.auditorClient.cashAuditAssignment(assignmentInfo);
 
                     // Check whether moment is expired while cashing the hosting token.
                     if (!this.#checkMomentValidity(momentStartIdx))
@@ -133,9 +134,18 @@ class Auditor {
 
                     this.logMessage(momentStartIdx, `Redeeming from the host, token - ${hostInfo.currency}`);
                     const startLedger = this.xrplApi.ledgerIndex;
-                    const instanceInfo = await this.sendRedeemRequest(hostInfo, hpKeys);
-                    // Time took in ledgers for instance redeem.
-                    const ledgerTimeTook = this.xrplApi.ledgerIndex - startLedger;
+                    let ledgerTimeTook = 0;
+
+                    const instanceInfo = await this.sendRedeemRequest(hostInfo, hpKeys).finally(async () => {
+                        // Time took in ledgers for redeem to response.
+                        ledgerTimeTook = this.xrplApi.ledgerIndex - startLedger;
+
+                        // If the trustline was created by the audit assignment. Remove the trustline after the redeem.
+                        if (cashRes.trustCreated) {
+                            this.logMessage(momentStartIdx, `Removing trustline for ${hostInfo.currency}/${hostInfo.address}`);
+                            await this.auditorClient.removeAuditTrustline(hostInfo.address, hostInfo.currency);
+                        }
+                    });
 
                     // Check whether moment is expired while waiting for the redeem.
                     if (!this.#checkMomentValidity(momentStartIdx))
