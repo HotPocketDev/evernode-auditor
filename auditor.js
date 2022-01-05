@@ -125,8 +125,15 @@ class Auditor {
                     const cashRes = await this.auditorClient.cashAuditAssignment(assignmentInfo);
 
                     // Check whether moment is expired while cashing the hosting token.
-                    if (!this.#checkMomentValidity(momentStartIdx))
+                    if (!this.#checkMomentValidity(momentStartIdx)) {
+                        // If the trustline was created by the audit assignment. Remove the trustline after the redeem.
+                        if (cashRes.trustCreated) {
+                            this.logMessage(momentStartIdx, `Removing trustline for ${hostInfo.currency}/${hostInfo.address}`);
+                            await this.auditorClient.removeAuditTrustline(hostInfo.address, hostInfo.currency);
+                        }
+
                         throw 'Moment expired while cashing the hosting token.';
+                    }
 
                     // Generating Hot pocket key pair for this audit round.
                     const bootstrapClient = new BootstrapClient();
